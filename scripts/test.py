@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 from openpyxl import Workbook
 
-m = importlib.import_module('comfy-msync')
+m = importlib.import_module('../comfy-mod-sync')
 
 class Tests(unittest.TestCase):
     def setUp(self):
