@@ -7,9 +7,19 @@ printf '%s\n' 'nameserver 1.1.1.1' 'nameserver 1.0.0.1' > /etc/resolv.conf
 
 self_dir="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
 parent_dir="$self_dir/../"
-db_dir="$parent_dir/comfy-db/"
+t=($parent_dir/comfy-db*/); db_dir={t[0]-}
 comfy_dir="$parent_dir/comfy-ui/"
 model_dir="$parent_dir/comfy-models/"
+
+cd "$parent_dir"
+
+if [[ ! "$db_dir" ]]; then
+
+    gh auth status --active --hostname github.com >/dev/null 2>&1 ||
+        gh auth login --hostname github.com --git-protocol https --web
+
+    git pull https://github.com/michele-bizzoca/comfy-db-main
+fi
 
 cd "$comfy_dir"
 
