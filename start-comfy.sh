@@ -21,9 +21,8 @@ fi
 
 set -a; source "tokens-db-main/tokens-db-main.env"; set +a
 
-comfy-ui/.venv/bin/python3.12 /model-sync/model-sync.py sync
-
 cd comfy-ui
+.venv/bin/python3.12 ../model-sync/model-sync.py sync
 exec .venv/bin/python3.12  main.py --preview-method auto \
-     --enable-manager --listen 0.0.0.0 --port 8188 --verbose DETAIL \
+     --enable-manager --listen 0.0.0.0 --port ${1:-8188} --verbose DETAIL \
      --models-directory ../models
