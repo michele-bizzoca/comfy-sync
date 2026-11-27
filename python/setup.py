@@ -103,7 +103,7 @@ def install_dependencies() -> None:
 
 
 def configure_extensions() -> None:
-    (COMFY / "comfy-extension-paths.yaml").write_text("managed_extensions:\n  is_default: true\n  custom_nodes: " + json.dumps(str(PARENT / "comfy-extensions")) + "\n", encoding="utf-8")
+    (COMFY / "comfy-extension-paths.yaml").write_text("managed_extensions:\n  is_default: true\n  custom_nodes: " + json.dumps("../comfy-extensions") + "\n", encoding="utf-8")
     sync("extensions", "update")
 
 
