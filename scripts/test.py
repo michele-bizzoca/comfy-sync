@@ -1,5 +1,8 @@
 import contextlib
 import importlib
+import sys
+from email.message import Message
+from zipfile import ZipFile
 import hashlib
 import io
 import os
@@ -9,14 +12,27 @@ import unittest
 from unittest.mock import patch
 from openpyxl import Workbook
 
-m = importlib.import_module('../comfy-mod-sync')
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+m = importlib.import_module('comfy-mod-sync')
+
+class Response(io.BytesIO):
+    def __init__(self, data, filename='model.bin'):
+        super().__init__(data)
+        self.headers = Message()
+        if filename is not None:
+            self.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+    def geturl(self):
+        return 'https://example.com/model.bin'
 
 class Tests(unittest.TestCase):
     def setUp(self):
+        credentials = patch.dict(os.environ, {'HF_TOKEN': 'test-token', 'CA_TOKEN': 'test-token'})
+        credentials.start()
+        self.addCleanup(credentials.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name)
-        self.root = self.base / 'models'
+        self.root = self.base / 'comfy-models'
         self.root.mkdir()
         self.manifest = self.base / 'models.xlsx'
         self.data = b'good'
@@ -31,7 +47,7 @@ class Tests(unittest.TestCase):
         sheet = workbook.active
         sheet.append(headers)
         for row in rows:
-            sheet.append(row)
+            sheet.append([row[i] if i < len(row) else None for i in (0, 1, 5, 2, 3, 4, 6, 7)] if row else [])
         workbook.save(self.manifest)
         workbook.close()
     def call(self, *args):
@@ -67,7 +83,7 @@ class Tests(unittest.TestCase):
 
     def test_case_insensitive_logical_duplicate(self):
         first = self.row.copy(); first[1] = 'V1-Beta'
-        second = first.copy(); second[0] = 'mODEL'; second[1] = 'v1-beta'; second[2] = 'other.bin'; second[7] = ''
+        second = first.copy(); second[0] = 'mODEL'; second[1] = 'v1-beta'; second[2] = 'MODEL.BIN'; second[7] = ''
         self.write(first, second)
         code, out = self.call('check')
         self.assertEqual(code, 1); self.assertIn('duplicate name + version', out)
@@ -140,14 +156,60 @@ class Tests(unittest.TestCase):
     def test_download_atomic(self):
         model = next(iter(m.load_manifest(self.manifest).values()))
         self.target.write_bytes(b'old')
-        with patch.object(m, 'build_opener') as opener:
-            opener.return_value.open.return_value = io.BytesIO(b'bad!')
+        with patch.object(m, 'auth_token', return_value=None), patch.object(m, 'build_opener') as opener:
+            opener.return_value.open.return_value = Response(b'bad!')
             with self.assertRaises(ValueError): m.download(model, self.root)
             self.assertEqual(self.target.read_bytes(), b'old')
-            opener.return_value.open.return_value = io.BytesIO(self.data)
+            opener.return_value.open.return_value = Response(self.data)
             m.download(model, self.root)
             self.assertEqual(self.target.read_bytes(), self.data)
         self.assertEqual(list(self.target.parent.iterdir()), [self.target])
+    def test_direct_filename(self):
+        model = next(iter(m.load_manifest(self.manifest).values()))
+        with patch.object(m, 'auth_token', return_value=None), patch.object(m, 'build_opener') as opener:
+            for filename in ('wrong.bin', 'model.bin', None):
+                opener.return_value.open.return_value = Response(self.data, filename)
+                if filename == 'wrong.bin':
+                    with self.assertRaisesRegex(ValueError, 'filename'):
+                        m.download(model, self.root)
+                    self.assertFalse(self.target.exists())
+                else:
+                    m.download(model, self.root)
+                    self.assertEqual(self.target.read_bytes(), self.data)
+
+    def test_zip_downloads(self):
+        model = next(iter(m.load_manifest(self.manifest).values()))
+        for entries, valid in [
+            ([('nested/model.bin', self.data)], True),
+            ([('wrong.bin', self.data)], False),
+            ([('a/model.bin', self.data), ('b/model.bin', self.data)], False),
+            ([('model.bin', b'evil')], False),
+            ([('model.bin', b'oversize')], False),
+        ]:
+            with self.subTest(entries=entries):
+                archive = io.BytesIO()
+                with ZipFile(archive, 'w') as z:
+                    for name, data in entries:
+                        z.writestr(name, data)
+                self.target.write_bytes(b'old')
+                with patch.object(m, 'auth_token', return_value=None), patch.object(m, 'build_opener') as opener:
+                    opener.return_value.open.return_value = Response(archive.getvalue(), 'archive.zip')
+                    if valid:
+                        m.download(model, self.root)
+                    else:
+                        with self.assertRaises(ValueError):
+                            m.download(model, self.root)
+                self.assertEqual(self.target.read_bytes(), self.data if valid else b'old')
+                self.assertEqual(list(self.target.parent.iterdir()), [self.target])
+
+    def test_composite_identity_and_blank_version(self):
+        first = self.row.copy()
+        first[1] = ''
+        second = first.copy()
+        second[2] = 'other.bin'
+        self.write(first, second)
+        self.assertEqual(len(m.load_manifest(self.manifest)), 2)
+
     def test_symlink(self):
         (self.root / 'link').symlink_to(self.manifest)
         self.assertEqual(self.call('remove')[0], 1); self.assertTrue(self.extra.exists())
@@ -155,9 +217,9 @@ class Tests(unittest.TestCase):
     def automatic_layout(self):
         script_dir = self.base / 'model-sync'
         script_dir.mkdir()
-        db = self.base / 'models-db-personal'
+        db = self.base / 'comfy-db-personal'
         db.mkdir()
-        xlsx_path = db / 'collection.xlsx'
+        xlsx_path = db / 'model-db.xlsx'
         xlsx_path.write_bytes(self.manifest.read_bytes())
         return script_dir / 'model_sync.py', db, xlsx_path
 
@@ -170,9 +232,9 @@ class Tests(unittest.TestCase):
     def test_automatic_paths(self):
         script, db, _ = self.automatic_layout()
         (db / 'README.md').write_text('ignored')
-        (self.base / 'models-db-file').write_text('not a directory')
+        (self.base / 'comfy-db-file').write_text('not a directory')
         (db / 'nested.xlsx').mkdir()
-        (db / '~$collection.xlsx').touch()
+        (db / '~$model-db.xlsx').touch()
         code, out = self.auto_call(script, 'sync', '--dry-run')
         self.assertEqual(code, 0, out)
         self.assertIn('DOWNLOAD', out); self.assertIn('DELETE', out)
@@ -187,7 +249,7 @@ class Tests(unittest.TestCase):
 
     def test_multiple_databases(self):
         script, _, _ = self.automatic_layout()
-        (self.base / 'models-db-other').mkdir()
+        (self.base / 'comfy-db-other').mkdir()
         code, out = self.auto_call(script, 'remove')
         self.assertEqual(code, 1); self.assertIn('found 2', out)
         self.assertTrue(self.extra.exists())
@@ -196,14 +258,14 @@ class Tests(unittest.TestCase):
         script, _, path = self.automatic_layout()
         path.unlink()
         code, out = self.auto_call(script, 'remove')
-        self.assertEqual(code, 1); self.assertIn('exactly one XLSX', out); self.assertIn('found 0', out)
+        self.assertEqual(code, 1); self.assertIn('model-db.xlsx', out)
         self.assertTrue(self.extra.exists())
 
     def test_multiple_xlsxs(self):
         script, db, _ = self.automatic_layout()
         (db / 'other.xlsx').write_bytes(self.manifest.read_bytes())
-        code, out = self.auto_call(script, 'remove')
-        self.assertEqual(code, 1); self.assertIn('found 2', out)
+        code, out = self.auto_call(script, 'remove', '--dry-run')
+        self.assertEqual(code, 0, out)
         self.assertTrue(self.extra.exists())
 
     def test_explicit_xlsx_overrides_discovery(self):
@@ -227,10 +289,8 @@ class Tests(unittest.TestCase):
         self.assertFalse(self.root.exists())
 
     def test_token_file_and_environment_precedence(self):
-        script, _, _ = self.automatic_layout()
-        folder = self.base / 'token-db-personal'
-        folder.mkdir()
-        (folder / 'tokens.env').write_text('# credentials\nCA_TOKEN=ca-file\nHF_TOKEN="hf-file"\n')
+        script, folder, _ = self.automatic_layout()
+        (folder / 'token-db.env').write_text('# credentials\nCA_TOKEN=ca-file\nHF_TOKEN="hf-file"\n')
         with patch.object(m, '__file__', str(script)), patch.dict(os.environ, {'CA_TOKEN': 'ca-env'}, clear=True):
             self.assertEqual(m.auth_token('https://civitai.com/api/download/1'), 'ca-env')
             self.assertEqual(m.auth_token('https://huggingface.co/test'), 'hf-file')
@@ -247,20 +307,18 @@ class Tests(unittest.TestCase):
 
     def test_ambiguous_token_dirs_refused_before_mutation(self):
         script, _, _ = self.automatic_layout()
-        (self.base / 'token-db-one').mkdir()
-        (self.base / 'token-db-two').mkdir()
+        (self.base / 'comfy-db-one').mkdir()
+        (self.base / 'comfy-db-two').mkdir()
         with patch.dict(os.environ, {}, clear=True), patch.object(m, 'download') as download:
             code, out = self.auto_call(script, 'sync')
-            self.assertEqual(code, 1); self.assertIn('found 2', out)
+            self.assertEqual(code, 1); self.assertIn('found 3', out)
             download.assert_not_called()
             self.assertTrue(self.extra.exists())
-            self.assertEqual(self.auto_call(script, 'sync', '--dry-run')[0], 0)
+            self.assertEqual(self.auto_call(script, 'sync', '--dry-run')[0], 1)
 
     def test_malformed_token_file_does_not_leak_secret(self):
-        script, _, _ = self.automatic_layout()
-        folder = self.base / 'token-db-local'
-        folder.mkdir()
-        (folder / 'tokens.env').write_text('HF_TOKEN=secret-one\nHF_TOKEN=secret-two\n')
+        script, folder, _ = self.automatic_layout()
+        (folder / 'token-db.env').write_text('HF_TOKEN=secret-one\nHF_TOKEN=secret-two\n')
         with patch.dict(os.environ, {}, clear=True):
             code, out = self.auto_call(script, 'sync')
             self.assertEqual(code, 1); self.assertIn('line 2', out)
