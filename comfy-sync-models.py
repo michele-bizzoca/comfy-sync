@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 import re
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile, ZipFile, is_zipfile
@@ -211,11 +212,40 @@ def download(model, root):
         with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.model-sync-', suffix='.part', delete=False) as f:
             temp = Path(f.name)
             with opener.open(request, timeout=60) as response:
-                while True:
-                    data = response.read(CHUNK)
-                    if not data:
-                        break
-                    f.write(data)
+                total_header = response.headers.get('Content-Length', '')
+                total = int(total_header) if total_header.isdecimal() else 0
+                received = 0
+                started = time.monotonic()
+                last_report = started
+                interactive = sys.stderr.isatty()
+
+                def report():
+                    elapsed = max(time.monotonic() - started, 0.001)
+                    speed = received / elapsed / (1024 ** 2)
+                    amount = f'{received / (1024 ** 2):.1f} MiB'
+                    if total:
+                        fraction = min(received / total, 1)
+                        filled = int(fraction * 30)
+                        bar = '#' * filled + '-' * (30 - filled)
+                        amount = f'[{bar}] {fraction:6.1%} {amount}/{total / (1024 ** 2):.1f} MiB'
+                    print(f'{amount}  {speed:.1f} MiB/s', file=sys.stderr,
+                          end='\r' if interactive else '\n', flush=True)
+
+                try:
+                    while True:
+                        data = response.read(CHUNK)
+                        if not data:
+                            break
+                        f.write(data)
+                        received += len(data)
+                        now = time.monotonic()
+                        if now - last_report >= (0.25 if interactive else 10):
+                            report()
+                            last_report = now
+                finally:
+                    report()
+                    if interactive:
+                        print(file=sys.stderr, flush=True)
         candidate = temp
         if is_zipfile(temp):
             with ZipFile(temp) as archive:
