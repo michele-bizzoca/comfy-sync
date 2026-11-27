@@ -153,12 +153,7 @@ def token_key(url):
 
 
 def load_token_file(script_dir):
-    directories = sorted(p for p in script_dir.parent.glob('token-db*') if p.is_dir())
-    if not directories:
-        return {}
-    if len(directories) != 1:
-        raise ValueError(f'expected at most one token-db* directory; found {len(directories)}')
-    path = directories[0] / 'tokens.env'
+    path = discover_db(script_dir) / 'token-db.env'
     if not path.exists():
         return {}
     tokens = {}
@@ -170,11 +165,11 @@ def load_token_file(script_dir):
             key, sep, value = line.partition('=')
             key, value = key.strip(), value.strip()
             if not sep or key not in ('CA_TOKEN', 'HF_TOKEN') or key in tokens:
-                raise ValueError(f'invalid or duplicate token entry in tokens.env, line {number}')
+                raise ValueError(f'invalid or duplicate token entry in token-db.env, line {number}')
             if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
                 value = value[1:-1]
             if any(c.isspace() for c in value) or any(c in value for c in ('"', "'")):
-                raise ValueError(f'invalid token value in tokens.env, line {number}')
+                raise ValueError(f'invalid token value in token-db.env, line {number}')
             tokens[key] = value
     return tokens
 
@@ -343,7 +338,7 @@ def resolve_defaults(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__, epilog="Credentials: CA_TOKEN and HF_TOKEN in the environment, or tokens.env in a unique ../token-db* directory relative to the script.")
+    parser = argparse.ArgumentParser(description=__doc__, epilog="Credentials: CA_TOKEN and HF_TOKEN in the environment, or token-db.env in a unique ../comfy-db* directory relative to the script.")
     parser.add_argument('command', nargs='?', choices=('sync', 'add', 'remove', 'verify', 'check'), default='sync', help='default: sync; verify checks model files; check validates the XLSX only')
     parser.add_argument('--xlsx', type=Path, help='XLSX manifest (default: model-db.xlsx in unique ../comfy-db* directory relative to script)')
     parser.add_argument('--models-dir', '--models-directory', type=Path, help='dedicated models root (default: ../comfy-models relative to script)')
