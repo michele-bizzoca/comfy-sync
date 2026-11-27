@@ -390,7 +390,7 @@ def transfer(model, temp, state_path, scratch, connections, progress=None):
                     received += size
                     done += size
                     state['completed'] = sorted(completed)
-                    save(state)
+                    save_download_state(scratch, state_path, state)
                     if time.monotonic() - last >= 2:
                         report(done, total)
                         last = time.monotonic()
