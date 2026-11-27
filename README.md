@@ -91,7 +91,7 @@ sha256sum example.safetensors
 
 A disabled model is outside the desired mirror: update/remove may delete its local file; verify reports it as extra. Add does not delete it. Link = ? is valid for catalog validation and for an already present file of the expected size. If an enabled file needs downloading (missing or wrong size), update/add fail before mutation, including dry-run. Verify checks SHA-256 independently of Link.
 
-Downloads accept a direct file with matching remote filename or a ZIP containing exactly one member whose basename matches Filename. Size and SHA-256 must match before atomic replacement. HTTPS redirects are checked and authorization is stripped across origins. Extras are deleted only after all downloads succeed. Existing same-size files are not hashed by update/add; use verify to detect corruption.
+Downloads accept a direct file with matching remote filename or a ZIP containing exactly one member whose basename matches Filename. Size and SHA-256 must match before atomic replacement. HTTPS redirects are checked and authorization is stripped across origins. Extras are deleted before downloads begin, after preflight validation. A subsequent download failure does not restore deleted files. Existing same-size files are not hashed by update/add; use verify to detect corruption.
 
 Record scans recursively, including ordinary non-model files. Existing paths retain all catalog cell values except Enable, which becomes X; it does not refresh their size or hash. New paths get actual size and SHA-256, Name/Version/Link = ?, Enable = X. Missing paths are omitted. Dry-run lists changes without hashing new files or writing the workbook. Internal symlinks are refused.
 
