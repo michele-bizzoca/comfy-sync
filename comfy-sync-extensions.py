@@ -213,13 +213,14 @@ def run(args):
         return 0
     for name in [e.name for e, _ in installs if e.name in entries] + deletes:
         clean(entries[name])
+    # Delete extra repositories before cloning or installing requirements.
+    for name in deletes:
+        clean(entries[name])
+        shutil.rmtree(entries[name])
     for e, _ in installs:
         install(e, root)
     for ext, _ in installs:
         install_requirements(ext, root, args.python)
-    for name in deletes:
-        clean(entries[name])
-        shutil.rmtree(entries[name])
     return 0
 
 def main(argv=None):
