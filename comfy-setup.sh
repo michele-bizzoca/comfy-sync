@@ -12,6 +12,7 @@ fi
 db_dir="${db_dirs[0]}"
 comfy_dir="$parent_dir/comfy-ui"
 model_dir="$parent_dir/comfy-models"
+ext_dir="$parent_dir/comfy-extensions"
 output_dir="$parent_dir/comfy-output"
 input_dir="$parent_dir/comfy-input"
 
@@ -50,6 +51,10 @@ if [[ -d "$comfy_dir/input" && ! -e "$input_dir" && ! -L "$input_dir" ]]; then
     mv "$comfy_dir/input" "$input_dir"
 fi
 mkdir -p "$model_dir" "$output_dir" "$input_dir" "$comfy_dir/user/default"
+if [[ -d "$comfy_dir/custom_nodes" && ! -e "$ext_dir" && ! -L "$ext_dir" ]]; then
+    mv "$comfy_dir/custom_nodes" "$ext_dir"
+fi
+mkdir -p "$ext_dir"
 if ! command -v "python$PYTHON_VERSION" >/dev/null || ! "python$PYTHON_VERSION" -c "import ensurepip" >/dev/null 2>&1; then
     sudo apt update
     sudo apt install -y "python$PYTHON_VERSION" "python$PYTHON_VERSION-venv"
@@ -66,6 +71,12 @@ if [[ -f "$comfy_dir/manager_requirements.txt" ]]; then
     "$py" -m pip install -r "$comfy_dir/manager_requirements.txt"
 fi
 "$py" -m pip install opencv-python-headless ultralytics matrix-nio imageio-ffmpeg onnxruntime-gpu PyOpenGL-accelerate scikit-image
+"$py" - "$comfy_dir/comfy-extension-paths.yaml" "$ext_dir" <<'PY'
+import json
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text("managed_extensions:\n  is_default: true\n  custom_nodes: " + json.dumps(sys.argv[2]) + "\n", encoding="utf-8")
+PY
 "$py" "$self_dir/comfy-ext-sync.py" sync
 "$py" -m pip check
 "$py" - "$TORCH_VERSION" "$required_cuda" <<'PY'

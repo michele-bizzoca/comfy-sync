@@ -190,7 +190,7 @@ def main(argv=None):
         if a.xlsx.suffix.lower() != '.xlsx':
             raise ValueError('manifest must have .xlsx extension')
         if a.extensions_dir is None:
-            a.extensions_dir = base / 'comfy-ui' / 'custom_nodes'
+            a.extensions_dir = base / 'comfy-extensions'
         return run(a)
     except (OSError, ValueError, RuntimeError, BadZipFile, ParseError, ImportError, subprocess.CalledProcessError) as e:
         print(f'Error: {e}', file=sys.stderr)
