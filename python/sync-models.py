@@ -7,6 +7,7 @@ when the download URL is unknown; a required download then fails explicitly.
 """
 import argparse
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -173,27 +174,11 @@ def token_key(url):
 
 
 def load_token_file(script_dir):
-    """Parse literal environment assignments without executing shell code."""
+    """Read optional fallback credentials using the shared token parser."""
     path = discover_db(script_dir) / 'token-db.env'
     if not path.exists():
         return {}
-    tokens = {}
-    with path.open(encoding='utf-8-sig') as f:
-        for number, line in enumerate(f, 1):
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            if line.startswith(('export ', 'export\t')):
-                line = line[6:].lstrip()
-            key, sep, value = line.partition('=')
-            key, value = key.strip(), value.strip()
-            if not sep or not key or not key.isascii() or not (key[0].isalpha() or key[0] == '_') or not all(c.isalnum() or c == '_' for c in key):
-                raise ValueError(f'invalid environment assignment in token-db.env, line {number}')
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-                value = value[1:-1]
-            # Later assignments override earlier ones; values are never shell-expanded.
-            tokens[key] = value
-    return tokens
+    return importlib.import_module("sync-tokens").read_tokens(path)
 
 
 def auth_token(url):
