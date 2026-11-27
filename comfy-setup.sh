@@ -88,7 +88,7 @@ then
 fi
 printf 'torch==%s\n' "$TORCH_VERSION" > "$comfy_dir/.venv/comfy-constraints.txt"
 export PIP_CONSTRAINT="$comfy_dir/.venv/comfy-constraints.txt"
-"$py" -m pip install -r "$self_dir/requirements.txt" -r "$comfy_dir/requirements.txt"
+"$py" -m pip install httpx -r "$self_dir/requirements.txt" -r "$comfy_dir/requirements.txt"
 if [[ -f "$comfy_dir/manager_requirements.txt" ]]; then
     "$py" -m pip install -r "$comfy_dir/manager_requirements.txt"
 fi
