@@ -16,7 +16,7 @@ workspace/
     sync-models.py
     sync-extensions.py
     requirements.txt
-    test.py
+    tests.py
   comfy-db-main/
     model-db.xlsx
     extension-db.xlsx
