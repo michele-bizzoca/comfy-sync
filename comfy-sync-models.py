@@ -148,9 +148,9 @@ def problem(model, path, verify):
 def token_key(url):
     host = urlsplit(url).hostname
     if host in ('civitai.com', 'www.civitai.com'):
-        return 'CA_TOKEN'
+        return 'TOKEN_CA'
     if host in ('huggingface.co', 'www.huggingface.co'):
-        return 'HF_TOKEN'
+        return 'TOKEN_HF'
     return None
 
 
