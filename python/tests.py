@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Regression tests for the model and extension catalog synchronizers."""
+"""Regression tests for the model and extension catalog synchronizers.
+
+Use isolated temporary workspaces, synthetic XLSX catalogs and mocked network,
+Git and installation operations to exercise CLI behavior and safety guarantees.
+"""
 
 import contextlib
 import hashlib
@@ -27,12 +31,14 @@ class WorkspaceTestCase(unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        # Register cleanup immediately so failed assertions cannot leave fixtures behind.
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)
 
     @staticmethod
     def write_workbook(path, headers, rows):
+        """Create a real XLSX fixture and close the workbook after saving."""
         workbook = Workbook()
         try:
             sheet = workbook.active
@@ -45,6 +51,7 @@ class WorkspaceTestCase(unittest.TestCase):
 
     @staticmethod
     def invoke(module, argv):
+        """Capture both CLI output streams and return the exit status and combined text."""
         output = io.StringIO()
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             status = module.main(argv)
@@ -56,6 +63,7 @@ class ModelTests(WorkspaceTestCase):
 
     def setUp(self):
         super().setUp()
+        # Use synthetic credentials and restore the caller's environment after each test.
         credentials = patch.dict(os.environ, {"TOKEN_CA": "test-token", "TOKEN_HF": "test-token"})
         credentials.start()
         self.addCleanup(credentials.stop)
@@ -89,6 +97,7 @@ class ModelTests(WorkspaceTestCase):
         )
 
     def fake_download(self, model, root, connections=4, progress=None):
+        """Simulate successful publication without network access."""
         target = root.joinpath(*model.path.parts)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(self.data)
@@ -98,6 +107,7 @@ class ModelTests(WorkspaceTestCase):
         """Route synchronous HTTP traffic to an in-process fake server."""
         import httpx
 
+        # Capture the real constructor before patching it to avoid recursive calls.
         original_client = httpx.Client
         transport = httpx.MockTransport(handler)
 
@@ -107,6 +117,7 @@ class ModelTests(WorkspaceTestCase):
         return patch.object(httpx, "Client", side_effect=client_factory)
 
     def test_http_range_download_and_no_range_fallback(self):
+        """Exercise both HTTP transfer strategies with a synthetic server."""
         import httpx
 
         model = next(iter(models.load_manifest(self.manifest).values()))
@@ -152,6 +163,7 @@ class ModelTests(WorkspaceTestCase):
                 self.target.unlink()
 
     def test_http_resume_with_strong_etag(self):
+        """Reuse a completed range when the remote entity still matches."""
         import httpx
 
         model = next(iter(models.load_manifest(self.manifest).values()))
@@ -159,6 +171,7 @@ class ModelTests(WorkspaceTestCase):
             self.root.joinpath(*relative.parts)
             for relative in models.partial_paths(model.path)
         )
+        # Seed the payload and metadata as if a previous run completed the only range.
         temporary.write_bytes(self.data)
         metadata.write_text(json.dumps({
             "identity": {
@@ -188,6 +201,7 @@ class ModelTests(WorkspaceTestCase):
         self.assertFalse(metadata.exists())
 
     def test_http_segment_retries_invalid_range_response(self):
+        """Retry a failed segment without waiting for real backoff delays."""
         import httpx
 
         model = next(iter(models.load_manifest(self.manifest).values()))
@@ -210,6 +224,7 @@ class ModelTests(WorkspaceTestCase):
                 stream=httpx.ByteStream(self.data),
             )
 
+        # Assert retry timing without actually sleeping.
         with self.mock_http(serve), patch.object(models.time, "sleep") as sleep:
             models.download(model, self.root, connections=1)
         sleep.assert_called_once_with(1)
@@ -371,6 +386,7 @@ class ModelTests(WorkspaceTestCase):
         self.assertEqual(self.target.read_bytes(), self.data)
 
     def test_verify(self):
+        # Equal-size corruption is detected by verify, not by normal add planning.
         self.target.write_bytes(b'evil')
         self.assertNotIn('DOWNLOAD', self.call('add', '--dry-run')[1])
         with patch.object(models, 'download') as download:
@@ -437,6 +453,7 @@ class ModelTests(WorkspaceTestCase):
             self.assertTrue(self.extra.exists())
 
     def test_download_atomic(self):
+        """Preserve an existing target until replacement bytes pass validation."""
         model = next(iter(models.load_manifest(self.manifest).values()))
         self.target.write_bytes(b"old")
 
@@ -466,6 +483,7 @@ class ModelTests(WorkspaceTestCase):
         self.assertEqual(self.target.read_bytes(), self.data)
 
     def test_zip_downloads_select_by_size_and_hash(self):
+        """Select archive members by content rather than their names."""
         model = next(iter(models.load_manifest(self.manifest).values()))
         cases = [
             ([("nested/unrelated-name.bin", self.data)], True),
@@ -508,6 +526,7 @@ class ModelTests(WorkspaceTestCase):
         self.assertTrue(self.extra.exists())
 
     def automatic_layout(self):
+        """Construct a workspace for testing automatic path discovery."""
         script_dir = self.base / 'model-sync' / 'python'
         script_dir.mkdir(parents=True)
         db = self.base / 'comfy-db-personal'
@@ -517,6 +536,7 @@ class ModelTests(WorkspaceTestCase):
         return script_dir / 'model_sync.py', db, xlsx_path
 
     def auto_call(self, script, *args):
+        """Invoke the model CLI using a simulated script location."""
         out = io.StringIO()
         with patch.object(models, '__file__', str(script)), contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
             status = models.main(list(args))
@@ -618,6 +638,7 @@ class ModelTests(WorkspaceTestCase):
             self.assertEqual(models.auth_token("https://www.civitai.red/api/download/1"), "second")
 
     def test_redirect_strips_cross_origin_authorization(self):
+        """Retain credentials only across redirects within the original origin."""
         class Response:
             def __init__(self, status, headers=None):
                 self.status_code = status
@@ -639,6 +660,7 @@ class ModelTests(WorkspaceTestCase):
                 self.requests.append(request)
                 return next(self.responses)
 
+        # A CDN redirect must retain Range but drop the bearer credential.
         redirected = Response(302, {"location": "https://cdn.example.org/file"})
         final = Response(200)
         client = Client([redirected, final])
@@ -774,11 +796,13 @@ class ModelTests(WorkspaceTestCase):
         self.assertFalse(other.exists())
 
     def test_record_models(self):
+        """Preserve known metadata, omit absent files and measure new files."""
         old = self.row.copy()
         old[7] = ''
         missing = self.row.copy()
         missing[2] = 'missing.bin'
         self.write(old, missing)
+        # Recording an existing path preserves its catalog hash and size.
         self.target.write_bytes(b'changed')
         self.assertEqual(self.call('record')[0], 0)
         catalog = models.load_manifest(self.manifest)
@@ -929,6 +953,7 @@ class ExtensionTests(WorkspaceTestCase):
         self.assertTrue(extra.exists())
 
     def test_failed_install_after_eager_deletion(self):
+        """Report pending work when installation fails after extras are deleted."""
         extra = self.root / "unknown"
         extra.mkdir()
         with patch.object(extensions, "clean"), patch.object(
@@ -1001,6 +1026,7 @@ class ExtensionTests(WorkspaceTestCase):
         self.assertTrue(self.xlsx.is_file())
 
     def test_requirements_python(self):
+        """Use the configured interpreter and extension working directory for pip."""
         target = self.root / 'Example'
         target.mkdir()
         requirements = target / 'requirements.txt'
