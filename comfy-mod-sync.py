@@ -13,7 +13,7 @@ from zipfile import BadZipFile, ZipFile, is_zipfile
 from urllib.parse import urlsplit
 from urllib.request import Request, HTTPRedirectHandler, build_opener
 
-FIELDS = ('Name', 'Version', 'Filename', 'Size', 'Hash', 'Folder', 'Link', 'Enable')
+FIELDS = ('Name', 'Version', 'Folder', 'Filename', 'Size', 'Hash', 'Link', 'Enable')
 CHUNK = 1024 * 1024
 
 @dataclass(frozen=True)
@@ -69,11 +69,11 @@ def load_manifest(path):
                     raise ValueError('unexpected values beyond the header')
                 row = dict(zip(header, values))
                 key = (row['name'], row['version'])
-                if not all(key):
-                    raise ValueError('name and version are required')
-                logical_key = tuple(value.casefold() for value in key)
+                if not row['name'] or not row['filename']:
+                    raise ValueError('name and filename are required')
+                logical_key = tuple(value.casefold() for value in (*key, row['filename']))
                 if logical_key in logical:
-                    raise ValueError('duplicate name + version')
+                    raise ValueError('duplicate name + version + filename')
                 rel = relative_path(row['folder'], row['filename'])
                 if rel in models:
                     raise ValueError('duplicate subdirectory + filename')
