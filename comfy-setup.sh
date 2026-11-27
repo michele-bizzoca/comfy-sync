@@ -12,6 +12,7 @@ fi
 db_dir="${db_dirs[0]}"
 comfy_dir="$parent_dir/comfy-ui"
 model_dir="$parent_dir/comfy-models"
+output_dir="$parent_dir/comfy-output"
 
 unset COMFY_VERSION PYTHON_VERSION TORCH_VERSION
 source "$db_dir/version-db.env"
@@ -41,7 +42,10 @@ git -C "$comfy_dir" checkout --detach "$commit"
 if [[ -d "$comfy_dir/models" && ! -d "$model_dir" ]]; then
     mv "$comfy_dir/models" "$model_dir"
 fi
-mkdir -p "$model_dir" "$comfy_dir/user/default"
+if [[ -d "$comfy_dir/output" && ! -e "$output_dir" && ! -L "$output_dir" ]]; then
+    mv "$comfy_dir/output" "$output_dir"
+fi
+mkdir -p "$model_dir" "$output_dir" "$comfy_dir/user/default"
 if ! command -v "python$PYTHON_VERSION" >/dev/null || ! "python$PYTHON_VERSION" -c "import ensurepip" >/dev/null 2>&1; then
     sudo apt update
     sudo apt install -y "python$PYTHON_VERSION" "python$PYTHON_VERSION-venv"
