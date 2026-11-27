@@ -9,7 +9,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from xml.etree.ElementTree import ParseError
-from zipfile import BadZipFile
+from zipfile import BadZipFile, ZipFile, is_zipfile
 from urllib.parse import urlsplit
 from urllib.request import Request, HTTPRedirectHandler, build_opener
 
@@ -204,28 +204,45 @@ def download(model, root):
         headers['Authorization'] = f'Bearer {token}'
     request = Request(model.url, headers=headers)
     opener = build_opener(SafeRedirect())
-    temp = None
+    temp = extracted = None
     try:
         with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.model-sync-', suffix='.part', delete=False) as f:
             temp = Path(f.name)
-            h = hashlib.sha256()
-            count = 0
             with opener.open(request, timeout=60) as response:
                 while True:
                     data = response.read(CHUNK)
                     if not data:
                         break
-                    count += len(data)
-                    if count > model.size:
-                        raise ValueError('download larger than expected')
-                    h.update(data)
                     f.write(data)
-            if count != model.size or h.hexdigest() != model.sha256:
-                raise ValueError('download failed size or SHA-256 verification')
-        os.replace(temp, target)
+        candidate = temp
+        if is_zipfile(temp):
+            with ZipFile(temp) as archive:
+                matches = [entry for entry in archive.infolist()
+                           if not entry.is_dir() and PurePosixPath(entry.filename).name == target.name]
+                if len(matches) != 1:
+                    raise ValueError('ZIP must contain exactly one matching model filename')
+                if matches[0].file_size != model.size:
+                    raise ValueError('ZIP model size mismatch')
+                with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.model-sync-', suffix='.part', delete=False) as f:
+                    extracted = Path(f.name)
+                    count = 0
+                    with archive.open(matches[0]) as source:
+                        while True:
+                            data = source.read(CHUNK)
+                            if not data:
+                                break
+                            count += len(data)
+                            if count > model.size:
+                                raise ValueError('extracted model larger than expected')
+                            f.write(data)
+                candidate = extracted
+        if candidate.stat().st_size != model.size or sha256(candidate) != model.sha256:
+            raise ValueError('download failed size or SHA-256 verification')
+        os.replace(candidate, target)
     finally:
-        if temp is not None:
-            temp.unlink(missing_ok=True)
+        for item in (temp, extracted):
+            if item is not None:
+                item.unlink(missing_ok=True)
 
 
 def run(args):
