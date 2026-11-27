@@ -2,7 +2,7 @@
 """Launch ComfyUI with the managed directories and token environment.
 
 Load the token database, assemble the launch arguments and replace this
-process with the ComfyUI interpreter. The optional first argument sets the port.
+process with the ComfyUI interpreter, forwarding all caller arguments.
 """
 
 import os
@@ -42,15 +42,12 @@ def envfile(path: Path) -> dict[str, str]:
 def main() -> None:
     """Build the managed launch configuration and execute ComfyUI."""
     env = envfile(database() / "token-db.env")
-    port = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PORT
+    forwarded = sys.argv[1:]
     # Bind to all interfaces and load the custom-node path configuration.
     args = [
         str(PYTHON),
         str(COMFY / "main.py"),
-        "--preview-method", "auto",
         "--enable-manager",
-        "--listen", "0.0.0.0",
-        "--port", port,
         "--extra-model-paths-config", str(COMFY / "comfy-extension-paths.yaml"),
         "--verbose", "DETAIL",
     ]
@@ -58,6 +55,13 @@ def main() -> None:
     # Keep persistent data outside the ComfyUI checkout.
     for name in ("models", "output", "input"):
         args.extend([f"--{name}-directory", str(WORKSPACE / f"comfy-{name}")])
+
+    # Supply defaults only when the caller has not specified the corresponding option.
+    # Recognize both --option value and --option=value, including bare --listen.
+    for option, value in (("--preview-method", "auto"), ("--listen", "0.0.0.0"), ("--port", DEFAULT_PORT)):
+        if not any(arg == option or arg.startswith(option + "=") for arg in forwarded):
+            args.extend([option, value])
+    args.extend(forwarded)
 
     # Preserve the process ID and let ComfyUI receive signals directly.
     os.execve(str(PYTHON), args, env)
