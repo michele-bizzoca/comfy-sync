@@ -15,10 +15,8 @@ if (( ${#db_dirs[@]} > 1 )); then
     echo "Multiple comfy-db directories found" >&2
     exit 1
 elif [[ ${#db_dirs[@]} == 0 ]]; then
-    gh auth status --active --hostname github.com >/dev/null 2>&1 ||
-        gh auth login --hostname github.com --git-protocol https --web
-    gh repo clone michele-bizzoca/comfy-db-main "$parent_dir/comfy-db-main"
-    db_dir="$parent_dir/comfy-db-main/"
+    echo "No comfy-db directories found" >&2
+    exit 1
 fi
 
 if [[ -d "$comfy_dir/models" && ! -d "$model_dir" ]]; then
