@@ -555,6 +555,27 @@ class ExtensionTests(unittest.TestCase):
         with patch.object(self.ext, 'git', side_effect=[ext.url, ext.commit, '']):
             self.assertIsNone(self.ext.problem(ext, target))
 
+    def test_requirements_python(self):
+        target = self.root / 'Example'
+        target.mkdir()
+        requirements = target / 'requirements.txt'
+        requirements.touch()
+        explicit = self.base / 'other-venv' / 'bin' / 'python'
+        default = Path(self.ext.__file__).resolve().parent.parent / 'comfy-ui' / '.venv' / 'bin' / 'python'
+        for options, expected in (([], default), (['--python', str(explicit)], explicit)):
+            with self.subTest(options=options), patch.object(self.ext, 'problem', return_value='missing'), patch.object(self.ext, 'clean'), patch.object(self.ext, 'install'), patch.object(self.ext.subprocess, 'run') as run:
+                self.assertEqual(self.call('add', *options)[0], 0)
+                run.assert_called_once_with([str(expected), '-m', 'pip', 'install', '-r', str(requirements)], cwd=target, check=True)
+
+    def test_missing_python_fails_requirements(self):
+        target = self.root / 'Example'
+        target.mkdir()
+        (target / 'requirements.txt').touch()
+        with patch.object(self.ext, 'problem', return_value='missing'), patch.object(self.ext, 'clean'), patch.object(self.ext, 'install'):
+            code, out = self.call('add', '--python', str(self.base / 'missing-python'))
+        self.assertEqual(code, 1)
+        self.assertIn('missing-python', out)
+
     def test_check_dry_run(self):
         with patch.object(self.ext, 'load_manifest') as load:
             self.assertEqual(self.ext.main(['check', '--dry-run']), 0)

@@ -113,11 +113,11 @@ def install(ext, root):
                 backup.rename(target)
             raise
 
-def install_requirements(ext, root):
+def install_requirements(ext, root, python):
     requirements = root / ext.name / 'requirements.txt'
     if requirements.is_file():
         print(f'REQUIREMENTS {ext.name}', flush=True)
-        subprocess.run([sys.executable, '-m', 'pip', 'install', '-r', str(requirements)],
+        subprocess.run([str(python), '-m', 'pip', 'install', '-r', str(requirements)],
                        cwd=requirements.parent, check=True)
 
 def run(args):
@@ -165,7 +165,7 @@ def run(args):
     for e, _ in installs:
         install(e, root)
     for ext, _ in installs:
-        install_requirements(ext, root)
+        install_requirements(ext, root, args.python)
     for name in deletes:
         clean(entries[name])
         shutil.rmtree(entries[name])
@@ -176,6 +176,7 @@ def main(argv=None):
     p.add_argument('command', nargs='?', choices=('sync','add','remove','verify','check'), default='sync')
     p.add_argument('--database', type=Path, help='XLSX manifest (default: extension-db.xlsx in unique ../comfy-db* directory relative to script)')
     p.add_argument('--directory', dest='extensions_dir', type=Path)
+    p.add_argument('--python', type=Path, help='Python executable for extension requirements (default: ../comfy-ui/.venv/bin/python relative to script)')
     p.add_argument('--dry-run', action='store_true')
     a = p.parse_args(argv)
     if a.command == 'check' and a.dry_run:
@@ -191,6 +192,7 @@ def main(argv=None):
             raise ValueError('manifest must have .xlsx extension')
         if a.extensions_dir is None:
             a.extensions_dir = base / 'comfy-extensions'
+        a.python = (a.python or base / 'comfy-ui' / '.venv' / 'bin' / 'python').absolute()
         return run(a)
     except (OSError, ValueError, RuntimeError, BadZipFile, ParseError, ImportError, subprocess.CalledProcessError) as e:
         print(f'Error: {e}', file=sys.stderr)
