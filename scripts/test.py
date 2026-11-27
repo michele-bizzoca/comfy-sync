@@ -427,4 +427,137 @@ class Tests(unittest.TestCase):
             defaults.assert_not_called(); load.assert_not_called(); scan.assert_not_called()
         self.assertEqual(out.getvalue(), '')
 
+
+class ExtensionTests(unittest.TestCase):
+    def setUp(self):
+        self.ext = importlib.import_module('comfy-ext-sync')
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.root = self.base / 'custom_nodes'
+        self.root.mkdir()
+        self.xlsx = self.base / 'extension-db.xlsx'
+        self.row = ['Example', 'https://github.com/example/node.git', 'a' * 40]
+        self.write(self.row)
+
+    def write(self, *rows, header=('Name', 'Link', 'Commit')):
+        w = Workbook()
+        w.active.append(header)
+        for row in rows:
+            w.active.append(row)
+        w.save(self.xlsx)
+        w.close()
+
+    def call(self, *args):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = self.ext.main([*args, '--xlsx', str(self.xlsx), '--extensions-dir', str(self.root)])
+        return code, out.getvalue()
+
+    def test_check(self):
+        self.assertEqual(self.call('check')[0], 0)
+
+    def test_header_order(self):
+        self.write(self.row[::-1], header=('Commit', 'Link', 'Name'))
+        self.assertEqual(self.call('check')[0], 0)
+
+    def test_invalid_rows(self):
+        for row in (['../escape', *self.row[1:]], ['a/b', *self.row[1:]],
+                    ['Example', 'http://example.org/repo', self.row[2]],
+                    ['Example', 'https://user@example.org/repo', self.row[2]],
+                    ['Example', self.row[1], 'main'],
+                    ['Example', self.row[1], '=1+1'],
+                    [*self.row, 'unexpected']):
+            with self.subTest(row=row):
+                self.write(row)
+                self.assertEqual(self.call('check')[0], 1)
+
+    def test_duplicate(self):
+        self.write(self.row, ['example', *self.row[1:]])
+        self.assertEqual(self.call('check')[0], 1)
+
+    def test_empty_manifest(self):
+        self.write()
+        self.assertEqual(self.call('sync')[0], 1)
+
+    def test_bad_header(self):
+        self.write(self.row, header=('Name', 'URL', 'Commit'))
+        self.assertEqual(self.call('check')[0], 1)
+
+    def test_dry_run(self):
+        with patch.object(self.ext, 'install') as install:
+            code, out = self.call('sync', '--dry-run')
+            self.assertEqual(code, 0)
+            self.assertIn('INSTALL Example', out)
+            install.assert_not_called()
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_verify_missing(self):
+        self.assertEqual(self.call('verify')[0], 1)
+        self.assertEqual(self.call('verify', '--dry-run')[0], 0)
+
+    def test_symlink_refused(self):
+        (self.root / 'Example').symlink_to(self.base)
+        self.assertEqual(self.call('sync')[0], 1)
+
+    def test_nonrepo_preserved(self):
+        extra = self.root / 'unknown'
+        extra.mkdir()
+        (extra / 'data').write_text('keep')
+        self.assertEqual(self.call('remove')[0], 1)
+        self.assertTrue((extra / 'data').exists())
+
+    def test_add_preserves_extra(self):
+        extra = self.root / 'unknown'
+        extra.mkdir()
+        with patch.object(self.ext, 'install') as install:
+            self.assertEqual(self.call('add')[0], 0)
+            install.assert_called_once()
+        self.assertTrue(extra.exists())
+
+    def test_failed_install_preserves_extra(self):
+        extra = self.root / 'unknown'
+        extra.mkdir()
+        with patch.object(self.ext, 'clean'), patch.object(self.ext, 'install', side_effect=RuntimeError('failed')):
+            self.assertEqual(self.call('sync')[0], 1)
+        self.assertTrue(extra.exists())
+
+    def test_builtin_preserved(self):
+        builtin = self.root / 'websocket_image_save.py'
+        builtin.write_text('keep')
+        self.assertEqual(self.call('remove')[0], 0)
+        self.assertTrue(builtin.exists())
+
+    def test_dirty_repo_refused(self):
+        target = self.root / 'Example'
+        target.mkdir()
+        (target / '.git').mkdir()
+        with patch.object(self.ext, 'git', side_effect=[' M file']):
+            with self.assertRaises(ValueError):
+                self.ext.clean(target)
+
+    def test_origin_normalization(self):
+        self.assertEqual(self.ext.origin(self.row[1]), self.ext.origin(self.row[1][:-4]))
+
+    def test_commit_mismatch(self):
+        target = self.root / 'Example'
+        target.mkdir()
+        (target / '.git').mkdir()
+        ext = self.ext.load_manifest(self.xlsx)['Example']
+        with patch.object(self.ext, 'git', side_effect=[ext.url, 'b' * 40]):
+            self.assertEqual(self.ext.problem(ext, target), 'commit mismatch')
+
+    def test_matching_repo(self):
+        target = self.root / 'Example'
+        target.mkdir()
+        (target / '.git').mkdir()
+        ext = self.ext.load_manifest(self.xlsx)['Example']
+        with patch.object(self.ext, 'git', side_effect=[ext.url, ext.commit, '']):
+            self.assertIsNone(self.ext.problem(ext, target))
+
+    def test_check_dry_run(self):
+        with patch.object(self.ext, 'load_manifest') as load:
+            self.assertEqual(self.ext.main(['check', '--dry-run']), 0)
+            load.assert_not_called()
+
 if __name__ == '__main__': unittest.main()
