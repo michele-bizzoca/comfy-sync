@@ -164,9 +164,8 @@ def run(args):
         clean(entries[name])
     for e, _ in installs:
         install(e, root)
-    if args.command in ('sync', 'add'):
-        for ext in catalog.values():
-            install_requirements(ext, root)
+    for ext, _ in installs:
+        install_requirements(ext, root)
     for name in deletes:
         clean(entries[name])
         shutil.rmtree(entries[name])
