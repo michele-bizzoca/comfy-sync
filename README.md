@@ -148,14 +148,22 @@ Setup fetches the release tag from Comfy-Org/ComfyUI, checks out its commit, ins
 
 ### token-db.env
 
-Optional for model downloads when credentials are not needed or are already supplied through the environment; required by Start because it sources the file. Supported keys:
+Optional for model downloads when credentials are not needed or are already supplied through the environment; required by Start because it sources the file. This is a generic environment-variable file, not a restricted token catalog. Example:
 
 ```dotenv
-CA_TOKEN=
-HF_TOKEN=
+TOKEN_CA=
+TOKEN_HF=
+OTHER_VARIABLE=example
 ```
 
-CA_TOKEN authenticates civitai.com and www.civitai.com; HF_TOKEN authenticates huggingface.co and www.huggingface.co. Model downloads prefer a nonempty environment variable over the file. The model parser accepts blank lines, comments, KEY=VALUE and optionally matching quotes; it rejects unknown/duplicate keys and whitespace or quote characters inside values. It does not execute shell code. Start sources this file as shell code and exports its variables; keep it trusted and use simple assignments. Version files are also sourced by shell scripts. Never commit actual secrets to a public repository or embed them in catalog URLs. Record leaves tokens untouched.
+| Variable | Model download authentication |
+| --- | --- |
+| TOKEN_CA | civitai.com and www.civitai.com |
+| TOKEN_HF | huggingface.co and www.huggingface.co |
+
+For each supported host, model downloads prefer a nonempty process environment variable, then the corresponding value in token-db.env. If neither supplies a nonempty token, the request is unauthenticated. Tokens are sent as HTTP Authorization: Bearer headers and stripped on cross-origin redirects. Other hosts receive no token.
+
+The model parser accepts arbitrary valid environment variable names, blank lines, full-line comments, KEY=VALUE assignments, optional export prefixes and matching outer quotes. Duplicate assignments use the last value. Values are read literally after trimming surrounding whitespace and removing matching outer quotes; shell expansion and command execution are not performed. Other variables are accepted but not used for model authentication. Start sources this file as shell code and exports its variables; keep it trusted and use simple shell-compatible assignments. Version files are also sourced by shell scripts. Keep actual secrets out of version control and catalog URLs. Record leaves tokens untouched.
 
 ## Python command reference
 
@@ -200,7 +208,7 @@ Exit status: 0 success (including dry-run plans), 1 operational/validation failu
 
 ### comfy-setup.sh
 
-Provisions the installation from the database. Checks driver compatibility, fetches/checks out ComfyUI release, moves initial models/custom_nodes/input/output directories out when applicable, creates managed directories and venv, installs pinned CUDA Torch and requirements plus additional runtime dependencies, writes Torch constraints and extension-path YAML inside comfy-ui, updates extensions, runs pip check and CUDA smoke test, updates models and copies settings. Stops on error. Not a transactional installer; back up existing installations before running.
+Provisions the installation from the database. Checks driver compatibility, fetches/checks out ComfyUI release, moves initial models/custom_nodes/input/output directories out when applicable, creates managed directories and venv, checks existing Torch, torchvision and torchaudio before installing pinned CUDA Torch, then installs requirements plus additional runtime dependencies, writes Torch constraints and extension-path YAML inside comfy-ui, updates extensions, runs pip check and CUDA smoke test, updates models and copies settings. Stops on error. If all three Torch packages import successfully, Torch and CUDA versions match the database, and declared Torch dependencies of torchvision and torchaudio are satisfied, Setup skips both wheel-resolution dry-run and Torch installation. Otherwise it runs the original resolution and installation steps. The final CUDA smoke test and pip check still run. Setup can generally be rerun after completed stages, but recovery from an interrupted command is not guaranteed. Not a transactional installer; back up existing installations before running.
 
 ### comfy-update.sh
 
