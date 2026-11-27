@@ -477,6 +477,38 @@ class ModelPlan:
     matches: int
 
 
+def preflight_downloads(downloads):
+    """Check optional dependencies and credentials before deletions."""
+    if downloads:
+        try:
+            import httpx
+        except ImportError:
+            raise RuntimeError('downloads require httpx; install it in the venv') from None
+    # Validate fallback credentials before changing files. Never print token values.
+    for key in {token_key(model.url) for model, _ in downloads} - {None}:
+        if not os.environ.get(key):
+            load_token_file(Path(__file__).resolve().parent.parent)
+            break
+
+
+def validate_disk_layout(catalog, enabled_models, files, directories):
+    """Guard against partial-file, directory and filename collisions."""
+    reserved = {
+        partial
+        for relative in enabled_models
+        for partial in partial_paths(relative)
+    }
+    if (
+        reserved & set(catalog)
+        or reserved & directories
+        or any(parent in reserved for relative in catalog for parent in relative.parents)
+    ):
+        raise ValueError('partial download path conflicts with catalog or directory')
+    for relative in enabled_models:
+        if relative in directories or any(parent in files for parent in relative.parents):
+            raise ValueError(f'file/directory conflict on disk: {relative}')
+
+
 def verify_models(root, models, files, dry_run):
     """Read-only verification, including the no-hash dry-run mode."""
     # Dry run lists the plan without reading or validating file contents.
@@ -645,12 +677,7 @@ def run(args):
     catalog = load_manifest(manifest)
     models = {rel: model for rel, model in catalog.items() if model.enabled}
     files, dirs = scan(root)
-    reserved = {p for rel in models for p in partial_paths(rel)}
-    if reserved & set(catalog) or reserved & dirs or any(parent in reserved for rel in catalog for parent in rel.parents):
-        raise ValueError('partial download path conflicts with catalog or directory')
-    for rel in models:
-        if rel in dirs or any(parent in files for parent in rel.parents):
-            raise ValueError(f'file/directory conflict on disk: {rel}')
+    validate_disk_layout(catalog, models, files, dirs)
     if args.command == 'verify':
         return verify_models(root, models, files, args.dry_run)
 
@@ -658,16 +685,7 @@ def run(args):
     show_plan(args, root, plan)
     if args.dry_run:
         return 0
-    if plan.downloads:
-        try:
-            import httpx
-        except ImportError:
-            raise RuntimeError('plan.downloads require httpx; install it in the venv') from None
-    # Validate fallback credentials before changing files. Never print token values.
-    for key in {token_key(model.url) for model, _ in plan.downloads} - {None}:
-        if not os.environ.get(key):
-            load_token_file(Path(__file__).resolve().parent.parent)
-            break
+    preflight_downloads(plan.downloads)
     # Free space by deleting extras before starting plan.downloads.
     for rel in plan.deletions:
         files[rel].unlink()
