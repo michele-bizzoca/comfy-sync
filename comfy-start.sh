@@ -31,6 +31,8 @@ set -a; source "$db_dir/token-db.env"; set +a
 .venv/bin/python "$self_dir/comfy-mod-sync.py" sync
 .venv/bin/python "$self_dir/comfy-ext-sync.py" sync
 
+export AUX_ANNOTATOR_CKPTS_PATH="$model_dir/annotators"
+
 exec .venv/bin/python main.py --preview-method auto      \
      --enable-manager --listen 0.0.0.0 --port ${1:-8188} \
      --verbose DETAIL --models-directory "$models_dir"
