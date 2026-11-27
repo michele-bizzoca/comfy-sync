@@ -63,8 +63,29 @@ fi
 py="$comfy_dir/.venv/bin/python"
 "$py" -c 'import sys; assert ".".join(map(str, sys.version_info[:2])) == sys.argv[1], "Python version mismatch"' "$PYTHON_VERSION"
 "$py" -m pip install --upgrade pip
-"$py" -m pip install --dry-run --ignore-installed --only-binary=:all: "torch==$TORCH_VERSION" torchvision torchaudio --index-url "https://download.pytorch.org/whl/$cuda_tag" || { echo "No compatible Torch wheels for requested Python and CUDA" >&2; exit 1; }
-"$py" -m pip install "torch==$TORCH_VERSION" torchvision torchaudio --index-url "https://download.pytorch.org/whl/$cuda_tag"
+if ! "$py" - "$TORCH_VERSION" "$required_cuda" <<'PY'
+import sys
+try:
+    import torch
+    import torchvision
+    import torchaudio
+    from importlib.metadata import requires
+    from pip._vendor.packaging.requirements import Requirement
+    from pip._vendor.packaging.version import Version
+    assert torch.__version__ == sys.argv[1]
+    assert torch.version.cuda == sys.argv[2]
+    for package in ("torchvision", "torchaudio"):
+        for entry in requires(package) or ():
+            req = Requirement(entry)
+            if req.name.lower() == "torch" and (req.marker is None or req.marker.evaluate()):
+                assert req.specifier.contains(Version(torch.__version__), prereleases=True)
+except Exception:
+    sys.exit(1)
+PY
+then
+    "$py" -m pip install --dry-run --ignore-installed --only-binary=:all: "torch==$TORCH_VERSION" torchvision torchaudio --index-url "https://download.pytorch.org/whl/$cuda_tag" || { echo "No compatible Torch wheels for requested Python and CUDA" >&2; exit 1; }
+    "$py" -m pip install "torch==$TORCH_VERSION" torchvision torchaudio --index-url "https://download.pytorch.org/whl/$cuda_tag"
+fi
 printf 'torch==%s\n' "$TORCH_VERSION" > "$comfy_dir/.venv/comfy-constraints.txt"
 export PIP_CONSTRAINT="$comfy_dir/.venv/comfy-constraints.txt"
 "$py" -m pip install -r "$self_dir/requirements.txt" -r "$comfy_dir/requirements.txt"
