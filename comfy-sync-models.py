@@ -7,6 +7,8 @@ when the download URL is unknown; a required download then fails explicitly.
 """
 import argparse
 import hashlib
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -16,8 +18,7 @@ import time
 from dataclasses import dataclass
 from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile, ZipFile, is_zipfile
-from urllib.parse import urlsplit, unquote
-from urllib.request import Request, HTTPRedirectHandler, build_opener
+from urllib.parse import urlsplit, urljoin
 
 FIELDS = ('Name', 'Version', 'Folder', 'Filename', 'Size', 'Hash', 'Link', 'Enable')
 CHUNK = 1024 * 1024
@@ -184,68 +185,176 @@ def auth_token(url):
     return os.environ.get(key) or load_token_file(Path(__file__).resolve().parent).get(key) or None
 
 
-class SafeRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        target = urlsplit(newurl)
-        if target.scheme != 'https' or not target.hostname or target.username is not None or target.password is not None:
-            raise ValueError('unsafe download redirect')
-        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if redirected is not None:
-            # Never forward credentials to a different origin (e.g. a CDN).
-            old = urlsplit(req.full_url)
-            if (old.scheme, old.hostname, old.port or 443) != (target.scheme, target.hostname, target.port or 443):
-                redirected.remove_header('Authorization')
-        return redirected
+class DownloadError(RuntimeError):
+    pass
 
 
-def download(model, root):
-    target = root.joinpath(*model.path.parts)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    token = auth_token(model.url)
+def partial_paths(rel):
+    return tuple(rel.with_name(rel.name + suffix) for suffix in
+                 ('.part', '.part.json', '.part.json.tmp'))
+
+
+def stream(client, url, headers):
+    # Explicit redirects: never forward credentials across origins.
+    for _ in range(11):
+        u = urlsplit(url)
+        if u.scheme != 'https' or not u.hostname or u.username is not None or u.password is not None:
+            raise DownloadError('unsafe download redirect')
+        response = client.send(client.build_request('GET', url, headers=headers), stream=True)
+        if response.status_code not in (301, 302, 303, 307, 308):
+            return response
+        location = response.headers.get('location')
+        response.close()
+        if not location:
+            raise DownloadError('redirect without location')
+        next_url = urljoin(url, location)
+        v = urlsplit(next_url)
+        if (u.scheme, u.hostname, u.port or 443) != (v.scheme, v.hostname, v.port or 443):
+            headers = {k: v for k, v in headers.items() if k.lower() != 'authorization'}
+        url = next_url
+    raise DownloadError('too many redirects')
+
+
+def transfer(model, temp, state_path, scratch, connections):
+    import httpx
     headers = {'User-Agent': 'comfy-model-sync/0.1', 'Accept-Encoding': 'identity'}
+    token = auth_token(model.url)
     if token:
         headers['Authorization'] = f'Bearer {token}'
-    request = Request(model.url, headers=headers)
-    opener = build_opener(SafeRedirect())
-    temp = extracted = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.model-sync-', suffix='.part', delete=False) as f:
-            temp = Path(f.name)
-            with opener.open(request, timeout=60) as response:
-                total_header = response.headers.get('Content-Length', '')
-                total = int(total_header) if total_header.isdecimal() else 0
-                received = 0
-                started = time.monotonic()
-                last_report = started
-                interactive = sys.stderr.isatty()
+    identity = {'hash': model.sha256, 'size': model.size,
+                'url_hash': hashlib.sha256(model.url.encode()).hexdigest()}
+    started = time.monotonic()
+    received = 0
 
-                def report():
-                    elapsed = max(time.monotonic() - started, 0.001)
-                    speed = received / elapsed / (1024 ** 2)
-                    amount = f'{received / (1024 ** 2):.1f} MiB'
-                    if total:
-                        fraction = min(received / total, 1)
-                        filled = int(fraction * 30)
-                        bar = '#' * filled + '-' * (30 - filled)
-                        amount = f'[{bar}] {fraction:6.1%} {amount}/{total / (1024 ** 2):.1f} MiB'
-                    print(f'{amount}  {speed:.1f} MiB/s', file=sys.stderr,
-                          end='\r' if interactive else '\n', flush=True)
+    def save(state):
+        with scratch.open('w') as f:
+            json.dump(state, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(scratch, state_path)
 
-                try:
-                    while True:
-                        data = response.read(CHUNK)
-                        if not data:
-                            break
+    def report(done, total):
+        speed = received / max(time.monotonic() - started, .001) / 1048576
+        fraction = min(done / total, 1) if total else 0
+        bar = '#' * int(fraction * 20) + '-' * (20 - int(fraction * 20))
+        progress = f'[{bar}] {fraction:.1%} ' if total else ''
+        print(f'{model.path}: {progress}{done / 1048576:.1f} MiB  {speed:.1f} MiB/s', file=sys.stderr, flush=True)
+
+    with httpx.Client(timeout=60, follow_redirects=False, trust_env=False) as client:
+        try:
+            state = json.loads(state_path.read_text())
+        except (OSError, ValueError):
+            state = {}
+        if not isinstance(state, dict) or state.get('identity') != identity or not temp.is_file():
+            state = {}
+        if state.get('complete'):
+            return
+        with stream(client, model.url, dict(headers, Range='bytes=0-0')) as probe:
+            match = re.fullmatch(r'bytes 0-0/([0-9]+)', probe.headers.get('content-range', ''))
+            etag = probe.headers.get('etag')
+            if etag and etag.startswith('W/'):
+                etag = None
+            if probe.status_code == 206 and match and int(match[1]) > 0:
+                total = int(match[1])
+            elif probe.status_code in (200, 416):
+                total = None
+            else:
+                raise DownloadError(f'HTTP {probe.status_code}')
+        if total is None:
+            # No ranges: restart this transfer, never append an unverified response.
+            save({'identity': identity})
+            with stream(client, model.url, headers) as response:
+                if response.status_code != 200:
+                    raise DownloadError(f'HTTP {response.status_code}')
+                length = response.headers.get('content-length', '')
+                length = int(length) if length.isdecimal() else 0
+                last = started
+                with temp.open('wb') as f:
+                    for data in response.iter_raw(CHUNK):
                         f.write(data)
                         received += len(data)
-                        now = time.monotonic()
-                        if now - last_report >= (0.25 if interactive else 10):
-                            report()
-                            last_report = now
-                finally:
-                    report()
-                    if interactive:
-                        print(file=sys.stderr, flush=True)
+                        if time.monotonic() - last >= 2:
+                            report(received, length)
+                            last = time.monotonic()
+                    f.flush()
+                    os.fsync(f.fileno())
+                if length and received != length:
+                    raise DownloadError('incomplete response')
+                report(received, length)
+        else:
+            # Fixed chunks allow resumption even when concurrency changes.
+            block = 16 * 1024 * 1024
+            count = (total + block - 1) // block
+            if not (etag and state.get('etag') == etag and state.get('total') == total
+                    and temp.stat().st_size == total if state and temp.exists() else False):
+                state = {}
+            completed = {i for i in state.get('completed', []) if isinstance(i, int) and 0 <= i < count}
+            with temp.open('r+b' if state else 'w+b') as f:
+                f.truncate(total)
+            state = {'identity': identity, 'etag': etag, 'total': total, 'completed': sorted(completed)}
+            save(state)
+
+            def segment(i):
+                lo, hi = i * block, min(total, (i + 1) * block) - 1
+                request_headers = dict(headers, Range=f'bytes={lo}-{hi}')
+                if etag:
+                    request_headers['If-Range'] = etag
+                for attempt in range(3):
+                    try:
+                        with stream(client, model.url, request_headers) as response:
+                            if response.status_code != 206 or response.headers.get('content-range') != f'bytes {lo}-{hi}/{total}':
+                                raise DownloadError('range response mismatch')
+                            if etag and response.headers.get('etag') not in (None, etag):
+                                raise DownloadError('remote entity changed')
+                            offset = lo
+                            with temp.open('r+b', buffering=0) as f:
+                                f.seek(lo)
+                                for data in response.iter_raw(CHUNK):
+                                    if offset + len(data) > hi + 1:
+                                        raise DownloadError('range response too large')
+                                    f.write(data)
+                                    offset += len(data)
+                                if offset != hi + 1:
+                                    raise DownloadError('incomplete range')
+                                os.fsync(f.fileno())
+                        return i, hi - lo + 1
+                    except (httpx.HTTPError, OSError, DownloadError):
+                        if attempt == 2:
+                            raise
+                        time.sleep(attempt + 1)
+
+            failures = []
+            done = sum(min(block, total - i * block) for i in completed)
+            last = started
+            with ThreadPoolExecutor(max_workers=connections) as pool:
+                futures = [pool.submit(segment, i) for i in range(count) if i not in completed]
+                for future in as_completed(futures):
+                    try:
+                        i, size = future.result()
+                    except Exception as e:
+                        failures.append(e)
+                        continue
+                    completed.add(i)
+                    received += size
+                    done += size
+                    state['completed'] = sorted(completed)
+                    save(state)
+                    if time.monotonic() - last >= 2:
+                        report(done, total)
+                        last = time.monotonic()
+            report(done, total)
+            if failures:
+                raise failures[0]
+        save({'identity': identity, 'complete': True})
+
+
+def download(model, root, connections=8):
+    target = root.joinpath(*model.path.parts)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp, state_path, scratch = (root.joinpath(*p.parts) for p in partial_paths(model.path))
+    extracted = None
+    try:
+        transfer(model, temp, state_path, scratch, connections)
         candidate = temp
         if is_zipfile(temp):
             with ZipFile(temp) as archive:
@@ -278,8 +387,15 @@ def download(model, root):
         if sha256(candidate) != model.sha256:
             raise ValueError('download SHA-256 mismatch')
         os.replace(candidate, target)
+        temp.unlink(missing_ok=True)
+        state_path.unlink(missing_ok=True)
+    except (ValueError, BadZipFile):
+        # Invalid completed content must not be resumed indefinitely.
+        temp.unlink(missing_ok=True)
+        state_path.unlink(missing_ok=True)
+        raise
     finally:
-        for item in (temp, extracted):
+        for item in (scratch, extracted):
             if item is not None:
                 item.unlink(missing_ok=True)
 
@@ -310,6 +426,8 @@ def record(args):
     files, _ = scan(root)
     rows = []
     for rel, path in sorted(files.items()):
+        if rel.name.endswith(('.part', '.part.json', '.part.json.tmp')):
+            continue
         folder = rel.parent.as_posix() if rel.parent != PurePosixPath('.') else ''
         relative_path(folder, rel.name)
         if rel in existing:
@@ -366,6 +484,9 @@ def run(args):
     catalog = load_manifest(manifest)
     models = {rel: model for rel, model in catalog.items() if model.enabled}
     files, dirs = scan(root)
+    reserved = {p for rel in models for p in partial_paths(rel)}
+    if reserved & set(catalog) or reserved & dirs or any(parent in reserved for rel in catalog for parent in rel.parents):
+        raise ValueError('partial download path conflicts with catalog or directory')
     for rel in models:
         if rel in dirs or any(parent in files for parent in rel.parents):
             raise ValueError(f'file/directory conflict on disk: {rel}')
@@ -408,7 +529,8 @@ def run(args):
                     raise ValueError(f'{rel}: {reason}; missing download link (Link = ?)')
                 downloads.append((model, reason))
     if args.command in ('update', 'remove'):
-        deletions = sorted(set(files) - set(models))
+        keep = {p for model, _ in downloads for p in partial_paths(model.path)}
+        deletions = sorted(set(files) - set(models) - keep)
     print(f'{args.command.upper()}{" (DRY RUN)" if args.dry_run else ""}: {root}', flush=True)
     for model, reason in downloads:
         print(f'DOWNLOAD {model.path} ({reason})', flush=True)
@@ -417,6 +539,11 @@ def run(args):
     print(f'{len(downloads)} downloads, {len(deletions)} deletions', flush=True)
     if args.dry_run:
         return 0
+    if downloads:
+        try:
+            import httpx
+        except ImportError:
+            raise RuntimeError('downloads require httpx; install it in the venv') from None
     # Validate fallback credentials before changing files. Never print token values.
     for key in {token_key(model.url) for model, _ in downloads} - {None}:
         if not os.environ.get(key):
@@ -425,22 +552,33 @@ def run(args):
     # Free space by deleting extras before starting downloads.
     for rel in deletions:
         files[rel].unlink()
-    for model, _ in downloads:
-        print(f'Downloading {model.path}...', flush=True)
-        try:
-            download(model, root)
-        except Exception as e:
-            # Avoid printing request URLs (which could contain credentials).
-            detail = type(e).__name__
-            if isinstance(e, ValueError):
-                message = str(e)
-                if message in ["unsafe download redirect","ZIP contains no file of expected size","ZIP contains no file with expected SHA-256","extracted model larger than expected","download SHA-256 mismatch"]:
-                    detail += f': {message}'
-                elif message.startswith('download size mismatch (expected ') and message.endswith(' bytes)') and message.removeprefix('download size mismatch (expected ').removesuffix(' bytes)').replace(' bytes, got ', '').isdigit():
-                    detail += f': {message}'
-            elif isinstance(getattr(e, 'code', None), int):
-                detail += f': HTTP {e.code}'
-            raise RuntimeError(f'download failed for {model.path}: {detail}') from None
+    failures = 0
+    with ThreadPoolExecutor(max_workers=args.parallel_downloads) as pool:
+        futures = {pool.submit(download, model, root, args.connections_per_download): model
+                   for model, _ in downloads}
+        for future in as_completed(futures):
+            model = futures[future]
+            try:
+                future.result()
+                print(f'COMPLETE {model.path}', flush=True)
+                continue
+            except Exception as e:
+                failures += 1
+                # Avoid printing request URLs (which could contain credentials).
+                detail = type(e).__name__
+                if isinstance(e, ValueError):
+                    message = str(e)
+                    if message in ["unsafe download redirect","ZIP contains no file of expected size","ZIP contains no file with expected SHA-256","extracted model larger than expected","download SHA-256 mismatch"]:
+                        detail += f': {message}'
+                    elif message.startswith('download size mismatch (expected ') and message.endswith(' bytes)') and message.removeprefix('download size mismatch (expected ').removesuffix(' bytes)').replace(' bytes, got ', '').isdigit():
+                        detail += f': {message}'
+                elif isinstance(e, DownloadError):
+                    detail += f': {e}'
+                elif isinstance(getattr(e, 'code', None), int):
+                    detail += f': HTTP {e.code}'
+                print(f'Error: download failed for {model.path}: {detail}', file=sys.stderr, flush=True)
+    if failures:
+        return 1
     return 0
 
 
@@ -472,7 +610,11 @@ def main(argv=None):
     parser.add_argument('--database', type=Path, help='XLSX manifest (default: model-db.xlsx in unique ../comfy-db* directory relative to script)')
     parser.add_argument('--directory', dest='models_dir', type=Path, help='dedicated models root (default: ../comfy-models relative to script)')
     parser.add_argument('--dry-run', action='store_true', help='print the plan without writes, downloads or hash checks; check --dry-run does nothing')
+    parser.add_argument('--parallel-downloads', type=int, default=4)
+    parser.add_argument('--connections-per-download', type=int, default=8)
     args = parser.parse_args(argv)
+    if min(args.parallel_downloads, args.connections_per_download) < 1:
+        parser.error('download concurrency must be positive')
     if args.command == 'check' and args.dry_run:
         return 0
     try:
