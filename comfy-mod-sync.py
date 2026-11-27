@@ -10,7 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile, ZipFile, is_zipfile
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, unquote
 from urllib.request import Request, HTTPRedirectHandler, build_opener
 
 FIELDS = ('Name', 'Version', 'Folder', 'Filename', 'Size', 'Hash', 'Link', 'Enable')
@@ -209,6 +209,9 @@ def download(model, root):
         with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.model-sync-', suffix='.part', delete=False) as f:
             temp = Path(f.name)
             with opener.open(request, timeout=60) as response:
+                remote_filename = response.headers.get_filename()
+                if remote_filename is None:
+                    remote_filename = unquote(urlsplit(response.geturl()).path.rsplit('/', 1)[-1])
                 while True:
                     data = response.read(CHUNK)
                     if not data:
@@ -236,6 +239,8 @@ def download(model, root):
                                 raise ValueError('extracted model larger than expected')
                             f.write(data)
                 candidate = extracted
+        if candidate == temp and remote_filename != target.name:
+            raise ValueError('direct download filename does not match manifest')
         if candidate.stat().st_size != model.size or sha256(candidate) != model.sha256:
             raise ValueError('download failed size or SHA-256 verification')
         os.replace(candidate, target)
