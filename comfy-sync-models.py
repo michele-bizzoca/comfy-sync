@@ -211,9 +211,6 @@ def download(model, root):
         with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.model-sync-', suffix='.part', delete=False) as f:
             temp = Path(f.name)
             with opener.open(request, timeout=60) as response:
-                remote_filename = response.headers.get_filename()
-                if remote_filename is None:
-                    remote_filename = unquote(urlsplit(response.geturl()).path.rsplit('/', 1)[-1])
                 while True:
                     data = response.read(CHUNK)
                     if not data:
@@ -223,26 +220,29 @@ def download(model, root):
         if is_zipfile(temp):
             with ZipFile(temp) as archive:
                 matches = [entry for entry in archive.infolist()
-                           if not entry.is_dir() and PurePosixPath(entry.filename).name == target.name]
-                if len(matches) != 1:
-                    raise ValueError('ZIP must contain exactly one matching model filename')
-                if matches[0].file_size != model.size:
-                    raise ValueError('ZIP model size mismatch')
-                with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.model-sync-', suffix='.part', delete=False) as f:
-                    extracted = Path(f.name)
-                    count = 0
-                    with archive.open(matches[0]) as source:
-                        while True:
-                            data = source.read(CHUNK)
-                            if not data:
-                                break
-                            count += len(data)
-                            if count > model.size:
-                                raise ValueError('extracted model larger than expected')
-                            f.write(data)
-                candidate = extracted
-        if candidate == temp and remote_filename != target.name:
-            raise ValueError('direct download filename does not match manifest')
+                           if not entry.is_dir() and entry.file_size == model.size]
+                if not matches:
+                    raise ValueError('ZIP contains no file of expected size')
+                for entry in matches:
+                    with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.model-sync-', suffix='.part', delete=False) as f:
+                        extracted = Path(f.name)
+                        count = 0
+                        with archive.open(entry) as source:
+                            while True:
+                                data = source.read(CHUNK)
+                                if not data:
+                                    break
+                                count += len(data)
+                                if count > model.size:
+                                    raise ValueError('extracted model larger than expected')
+                                f.write(data)
+                    if count == model.size and sha256(extracted) == model.sha256:
+                        candidate = extracted
+                        break
+                    extracted.unlink()
+                    extracted = None
+                else:
+                    raise ValueError('ZIP contains no file with expected SHA-256')
         if candidate.stat().st_size != model.size:
             raise ValueError(f'download size mismatch (expected {model.size} bytes, got {candidate.stat().st_size} bytes)')
         if sha256(candidate) != model.sha256:
@@ -404,7 +404,7 @@ def run(args):
             detail = type(e).__name__
             if isinstance(e, ValueError):
                 message = str(e)
-                if message in ["unsafe download redirect","ZIP must contain exactly one matching model filename","ZIP model size mismatch","extracted model larger than expected","direct download filename does not match manifest","download SHA-256 mismatch"]:
+                if message in ["unsafe download redirect","ZIP contains no file of expected size","ZIP contains no file with expected SHA-256","extracted model larger than expected","download SHA-256 mismatch"]:
                     detail += f': {message}'
                 elif message.startswith('download size mismatch (expected ') and message.endswith(' bytes)') and message.removeprefix('download size mismatch (expected ').removesuffix(' bytes)').replace(' bytes, got ', '').isdigit():
                     detail += f': {message}'
