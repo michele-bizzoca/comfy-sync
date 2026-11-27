@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import importlib
 import io
+import json
 import os
 import sys
 import tempfile
@@ -91,6 +92,129 @@ class ModelTests(WorkspaceTestCase):
         target = root.joinpath(*model.path.parts)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(self.data)
+
+    @staticmethod
+    def mock_http(handler):
+        """Route synchronous HTTP traffic to an in-process fake server."""
+        import httpx
+
+        original_client = httpx.Client
+        transport = httpx.MockTransport(handler)
+
+        def client_factory(*args, **kwargs):
+            return original_client(*args, transport=transport, **kwargs)
+
+        return patch.object(httpx, "Client", side_effect=client_factory)
+
+    def test_http_range_download_and_no_range_fallback(self):
+        import httpx
+
+        model = next(iter(models.load_manifest(self.manifest).values()))
+        for supports_ranges in (True, False):
+            with self.subTest(supports_ranges=supports_ranges):
+                requests = []
+
+                def serve(request):
+                    byte_range = request.headers.get("range")
+                    requests.append(byte_range)
+                    if byte_range == "bytes=0-0":
+                        if supports_ranges:
+                            return httpx.Response(
+                                206,
+                                headers={
+                                    "content-range": "bytes 0-0/4",
+                                    "etag": '"stable"',
+                                },
+                                content=b"g",
+                            )
+                        return httpx.Response(200, content=self.data)
+                    if byte_range == "bytes=0-3":
+                        self.assertEqual(request.headers.get("if-range"), '"stable"')
+                        return httpx.Response(
+                            206,
+                            headers={
+                                "content-range": "bytes 0-3/4",
+                                "etag": '"stable"',
+                            },
+                            content=self.data,
+                        )
+                    self.assertIsNone(byte_range)
+                    return httpx.Response(200, content=self.data)
+
+                with self.mock_http(serve):
+                    models.download(model, self.root, connections=2)
+                self.assertEqual(self.target.read_bytes(), self.data)
+                self.assertEqual(
+                    requests,
+                    ["bytes=0-0", "bytes=0-3"]
+                    if supports_ranges else ["bytes=0-0", None],
+                )
+                self.target.unlink()
+
+    def test_http_resume_with_strong_etag(self):
+        import httpx
+
+        model = next(iter(models.load_manifest(self.manifest).values()))
+        temporary, metadata, _ = (
+            self.root.joinpath(*relative.parts)
+            for relative in models.partial_paths(model.path)
+        )
+        temporary.write_bytes(self.data)
+        metadata.write_text(json.dumps({
+            "identity": {
+                "hash": model.sha256,
+                "size": model.size,
+                "url_hash": hashlib.sha256(model.url.encode()).hexdigest(),
+            },
+            "etag": '"stable"',
+            "total": len(self.data),
+            "completed": [0],
+        }))
+        requests = []
+
+        def serve(request):
+            requests.append(request.headers.get("range"))
+            return httpx.Response(
+                206,
+                headers={"content-range": "bytes 0-0/4", "etag": '"stable"'},
+                content=b"g",
+            )
+
+        with self.mock_http(serve):
+            models.download(model, self.root, connections=1)
+        self.assertEqual(requests, ["bytes=0-0"])
+        self.assertEqual(self.target.read_bytes(), self.data)
+        self.assertFalse(temporary.exists())
+        self.assertFalse(metadata.exists())
+
+    def test_http_segment_retries_invalid_range_response(self):
+        import httpx
+
+        model = next(iter(models.load_manifest(self.manifest).values()))
+        ranges = []
+
+        def serve(request):
+            byte_range = request.headers.get("range")
+            ranges.append(byte_range)
+            if byte_range == "bytes=0-0":
+                return httpx.Response(
+                    206,
+                    headers={"content-range": "bytes 0-0/4", "etag": '"stable"'},
+                    content=b"g",
+                )
+            if ranges.count("bytes=0-3") == 1:
+                return httpx.Response(503)
+            return httpx.Response(
+                206,
+                headers={"content-range": "bytes 0-3/4", "etag": '"stable"'},
+                content=self.data,
+            )
+
+        with self.mock_http(serve), patch.object(models.time, "sleep") as sleep:
+            models.download(model, self.root, connections=1)
+        sleep.assert_called_once_with(1)
+        self.assertEqual(ranges, ["bytes=0-0", "bytes=0-3", "bytes=0-3"])
+        self.assertEqual(self.target.read_bytes(), self.data)
 
     def test_initial_and_final_summaries_include_matches(self):
         self.target.write_bytes(self.data)
