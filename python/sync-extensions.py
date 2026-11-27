@@ -209,11 +209,11 @@ def run(args):
     additions = sum(reason == 'missing' for _, reason in installs)
     replacements = len(installs) - additions
     print(f'{args.command.upper()}{" (DRY RUN)" if args.dry_run else ""}: {root}', flush=True)
+    print(f'{matches} matches, {len(installs)} installations ({additions} new, {replacements} replacements), {len(deletes)} deletions', flush=True)
     for e, reason in installs:
         print(f'INSTALL {e.name} ({reason})')
     for name in deletes:
         print(f'DELETE {name}')
-    print(f'{matches} matches, {len(installs)} installations ({additions} new, {replacements} replacements), {len(deletes)} deletions', flush=True)
     if args.dry_run:
         return 0
     for name in [e.name for e, _ in installs if e.name in entries] + deletes:
