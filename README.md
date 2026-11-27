@@ -158,7 +158,7 @@ OTHER_VARIABLE=example
 
 | Variable | Model download authentication |
 | --- | --- |
-| TOKEN_CA | civitai.com and www.civitai.com |
+| TOKEN_CA | civitai.com, www.civitai.com, civitai.red and www.civitai.red |
 | TOKEN_HF | huggingface.co and www.huggingface.co |
 
 For each supported host, model downloads prefer a nonempty process environment variable, then the corresponding value in token-db.env. If neither supplies a nonempty token, the request is unauthenticated. Tokens are sent as HTTP Authorization: Bearer headers and stripped on cross-origin redirects. Other hosts receive no token.
