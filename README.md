@@ -46,6 +46,7 @@ workspace/
     comfy-sync.bat
     requirements.txt
     README.md
+    LICENSE
     python/
       setup.py
       update.py
@@ -92,6 +93,33 @@ For an existing installation:
 ```
 
 Record changes the database, not the installation. Review its output and fill unknown model metadata before deploying elsewhere. No command automatically commits or pushes the database.
+
+## Command-line help
+
+Every Python entry point supports `-h` and `--help`. Both dispatchers provide general help when invoked without a command keyword, and forward command-specific help requests to the corresponding Python script.
+
+```sh
+./comfy-sync.sh --help
+./comfy-sync.sh setup -h
+./comfy-sync.sh sync-models --help
+./comfy-sync.sh start --help
+```
+
+On Windows, the equivalent dispatcher syntax is:
+
+```bat
+comfy-sync.bat --help
+comfy-sync.bat sync-extensions --help
+```
+
+Python entry points can also be invoked directly:
+
+```sh
+python python/sync-versions.py --help
+python python/tests.py --help
+```
+
+Use the managed Python interpreter where required. The Start help describes the launcher and its forwarding behavior; consult ComfyUI's own help for its complete native option list. The test runner uses the standard unittest help.
 
 ## Database reference
 
@@ -323,3 +351,7 @@ python python/sync-extensions.py check --database ../comfy-db-main/extension-db.
 ```
 
 The unit suite covers catalog validation, discovery, dry-run, record, download handling, extension reconciliation and requirements interpreter selection. A real GPU deployment and shell integration tests are separate from the Python unit suite. The latest dispatcher and extracted synchronizers have not yet been integration-tested; the Windows dispatcher is untested on Windows.
+
+## License
+
+Comfy Sync is released under the [MIT License](LICENSE).
