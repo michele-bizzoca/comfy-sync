@@ -432,6 +432,42 @@ class Tests(unittest.TestCase):
             self.assertEqual(self.call('sync')[0], 0)
         self.assertTrue(self.target.exists()); self.assertFalse(other.exists())
 
+    def test_record_models(self):
+        old = self.row.copy()
+        old[7] = ''
+        missing = self.row.copy()
+        missing[2] = 'missing.bin'
+        self.write(old, missing)
+        self.target.write_bytes(b'changed')
+        self.assertEqual(self.call('record')[0], 0)
+        models = m.load_manifest(self.manifest)
+        self.assertEqual(len(models), 2)
+        known = models[m.PurePosixPath('checkpoints/model.bin')]
+        self.assertTrue(known.enabled)
+        self.assertEqual((known.name, known.version, known.size, known.sha256, known.url),
+                         (old[0], old[1], int(old[3]), old[4], old[6]))
+        new = models[m.PurePosixPath('extra.bin')]
+        self.assertEqual((new.name, new.version, new.url), ('?', '?', '?'))
+        self.assertEqual(new.size, len(b'extra'))
+        self.assertEqual(new.sha256, hashlib.sha256(b'extra').hexdigest())
+        self.assertTrue(new.enabled)
+        self.assertEqual(self.target.read_bytes(), b'changed')
+
+    def test_record_new_and_empty_database(self):
+        self.manifest.unlink()
+        self.assertEqual(self.call('record')[0], 0)
+        self.extra.unlink()
+        self.assertEqual(self.call('record')[0], 0)
+        self.assertEqual(m.load_manifest(self.manifest, allow_empty=True), {})
+        self.assertEqual(self.call('record')[0], 0)
+
+    def test_record_dry_run(self):
+        original = self.manifest.read_bytes()
+        with patch.object(m, 'sha256') as sha:
+            self.assertEqual(self.call('record', '--dry-run')[0], 0)
+            sha.assert_not_called()
+        self.assertEqual(self.manifest.read_bytes(), original)
+
     def test_check_valid_without_models(self):
         self.write(self.row, ['Other', '1', 'other.bin', *self.row[3:-1], ''])
         with patch.object(m, 'scan') as scan, patch.object(m, 'download') as download, patch.object(m, 'auth_token') as token:

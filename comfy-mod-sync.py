@@ -43,7 +43,7 @@ def relative_path(directory, filename):
     return PurePosixPath(*parts)
 
 
-def load_manifest(path):
+def load_manifest(path, allow_empty=False):
     models = {}
     try:
         from openpyxl import load_workbook
@@ -96,7 +96,7 @@ def load_manifest(path):
                 raise ValueError(f'XLSX row {number}: {e}') from None
     finally:
         workbook.close()
-    if not models:
+    if not models and not allow_empty:
         raise ValueError('empty manifest refused as a deletion safeguard')
     for rel in models:
         if any(parent in models for parent in rel.parents):
@@ -252,11 +252,73 @@ def download(model, root):
                 item.unlink(missing_ok=True)
 
 
+def record(args):
+    from openpyxl import Workbook, load_workbook
+    destination = args.database.resolve()
+    root = args.models_dir.resolve(strict=True)
+    if not root.is_dir() or root in (Path(root.anchor), Path.home().resolve(), Path.cwd().resolve()):
+        raise ValueError('unsafe models root')
+    if destination.is_relative_to(root):
+        raise ValueError('XLSX must be outside the models directory')
+    existing = {}
+    if destination.exists():
+        load_manifest(destination, allow_empty=True)
+        workbook = load_workbook(destination, read_only=True, keep_links=False)
+        try:
+            rows = workbook.worksheets[0].values
+            header = [str(value or '').strip().casefold() for value in next(rows)]
+            for values in rows:
+                if not any(value is not None and str(value).strip() for value in values):
+                    continue
+                row = dict(zip(header, values))
+                rel = relative_path(str(row['folder'] or '').strip(), str(row['filename']).strip())
+                existing[rel] = [row[field.casefold()] for field in FIELDS]
+        finally:
+            workbook.close()
+    files, _ = scan(root)
+    rows = []
+    for rel, path in sorted(files.items()):
+        folder = rel.parent.as_posix() if rel.parent != PurePosixPath('.') else ''
+        relative_path(folder, rel.name)
+        if rel in existing:
+            row = existing[rel]
+            row[FIELDS.index('Enable')] = 'X'
+        else:
+            row = ['?', '?', folder, rel.name, path.stat().st_size,
+                   sha256(path) if not args.dry_run else None, '?', 'X']
+        rows.append(row)
+        print(f'RECORD {rel}')
+    for rel in sorted(set(existing) - set(files)):
+        print(f'OMIT {rel}')
+    if args.dry_run:
+        return 0
+    workbook = Workbook()
+    try:
+        sheet = workbook.active
+        sheet.append(FIELDS)
+        for row in rows:
+            sheet.append(row)
+            # Preserve literal text even when a filename starts with "=".
+            for cell in sheet[sheet.max_row]:
+                if isinstance(cell.value, str):
+                    cell.data_type = 's'
+        with tempfile.TemporaryDirectory(prefix='.model-record-', dir=destination.parent) as tmp:
+            staged = Path(tmp) / 'catalog.xlsx'
+            workbook.save(staged)
+            load_manifest(staged, allow_empty=True)
+            os.replace(staged, destination)
+    finally:
+        workbook.close()
+    return 0
+
+
 def run(args):
     if args.command == 'check' and args.dry_run:
         return 0
     if args.database.suffix.lower() != '.xlsx':
         raise ValueError('manifest must have the .xlsx extension')
+    if args.command == 'record':
+        return record(args)
     manifest = args.database.resolve(strict=True)
     if args.command == 'check':
         catalog = load_manifest(manifest)
@@ -365,7 +427,7 @@ def resolve_defaults(args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, epilog="Credentials: CA_TOKEN and HF_TOKEN in the environment, or token-db.env in a unique ../comfy-db* directory relative to the script.")
-    parser.add_argument('command', nargs='?', choices=('sync', 'add', 'remove', 'verify', 'check'), default='sync', help='default: sync; verify checks model files; check validates the XLSX only')
+    parser.add_argument('command', nargs='?', choices=('sync', 'add', 'remove', 'verify', 'check', 'record'), default='sync', help='default: sync; verify checks model files; check validates the XLSX only')
     parser.add_argument('--database', type=Path, help='XLSX manifest (default: model-db.xlsx in unique ../comfy-db* directory relative to script)')
     parser.add_argument('--directory', dest='models_dir', type=Path, help='dedicated models root (default: ../comfy-models relative to script)')
     parser.add_argument('--dry-run', action='store_true', help='print the plan without writes, downloads or hash checks; check --dry-run does nothing')
