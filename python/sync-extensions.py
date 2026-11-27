@@ -2,18 +2,23 @@
 """Mirror ComfyUI custom_nodes against a commit-pinned XLSX manifest."""
 import argparse
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlsplit
-from zipfile import BadZipFile
 from xml.etree.ElementTree import ParseError
+from zipfile import BadZipFile
 
 FIELDS = ('Name', 'Link', 'Commit')
+RESERVED_ENTRIES = frozenset({
+    '__pycache__',
+    'example_node.py.example',
+    'websocket_image_save.py',
+})
 
 @dataclass(frozen=True)
 class Extension:
@@ -21,23 +26,36 @@ class Extension:
     url: str
     commit: str
 
+
+@dataclass
+class SyncPlan:
+    entries: dict[str, Path]
+    changes: list[tuple[Extension, str]]
+    extras: list[str]
+    installs: list[tuple[Extension, str]]
+    deletes: list[str]
+    matches: int
+    additions: int
+    replacements: int
+
+
 def load_manifest(path):
     from openpyxl import load_workbook
     result, names = {}, set()
-    w = load_workbook(path, read_only=True, keep_links=False)
+    workbook = load_workbook(path, read_only=True, keep_links=False)
     try:
-        rows = w.worksheets[0].iter_rows()
-        header = [str(c.value or '').strip().casefold() for c in next(rows, ())]
+        rows = workbook.worksheets[0].iter_rows()
+        header = [str(cell.value or '').strip().casefold() for cell in next(rows, ())]
         while header and not header[-1]:
             header.pop()
         if len(header) != 3 or set(header) != {x.casefold() for x in FIELDS}:
             raise ValueError('XLSX must contain exactly: ' + ', '.join(FIELDS))
         for number, cells in enumerate(rows, 2):
-            values = [str(c.value if c.value is not None else '').strip() for c in cells]
+            values = [str(cell.value if cell.value is not None else '').strip() for cell in cells]
             if not any(values):
                 continue
             try:
-                if any(c.data_type in ('f', 'e') for c in cells) or any(values[3:]):
+                if any(cell.data_type in ('f', 'e') for cell in cells) or any(values[3:]):
                     raise ValueError('unexpected cells or formulas')
                 row = dict(zip(header, values))
                 name, url, commit = (row[k] for k in ('name', 'link', 'commit'))
@@ -45,8 +63,10 @@ def load_manifest(path):
                     raise ValueError('unsafe extension name')
                 if name.casefold() in names:
                     raise ValueError('duplicate extension name')
-                u = urlsplit(url)
-                if u.scheme != 'https' or not u.hostname or u.username is not None or u.password is not None or u.query or u.fragment:
+                parsed = urlsplit(url)
+                if (parsed.scheme != 'https' or not parsed.hostname
+                        or parsed.username is not None or parsed.password is not None
+                        or parsed.query or parsed.fragment):
                     raise ValueError('HTTPS repository URL without credentials required')
                 if not re.fullmatch(r'[0-9a-fA-F]{40}', commit):
                     raise ValueError('full Git commit SHA required')
@@ -55,18 +75,23 @@ def load_manifest(path):
             except ValueError as e:
                 raise ValueError(f'XLSX row {number}: {e}') from None
     finally:
-        w.close()
+        workbook.close()
     if not result:
         raise ValueError('empty manifest refused as a deletion safeguard')
     return result
 
 def git(path, *args):
     env = dict(os.environ, GIT_TERMINAL_PROMPT='0')
-    p = subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'protocol.file.allow=never', '-C', str(path), *args],
-                       env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if p.returncode:
-        raise RuntimeError(f'git {args[0]} failed for {path.name} (exit {p.returncode})')
-    return p.stdout.strip()
+    completed = subprocess.run(
+        ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'protocol.file.allow=never',
+         '-C', str(path), *args],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    if completed.returncode:
+        raise RuntimeError(
+            f'git {args[0]} failed for {path.name} (exit {completed.returncode})'
+        )
+    return completed.stdout.strip()
 
 def repository(path):
     return (path / '.git').is_dir() and not (path / '.git').is_symlink()
@@ -122,20 +147,13 @@ def install_requirements(ext, root, python):
 
 def record(args):
     from openpyxl import Workbook
-    root = args.extensions_dir
-    if root.is_symlink():
-        raise ValueError('symlink root refused')
-    root = root.resolve(strict=True)
-    if not root.is_dir() or root in (Path(root.anchor), Path.home().resolve(), Path.cwd().resolve()):
-        raise ValueError('unsafe extensions root')
     destination = args.database.resolve()
-    if destination.is_relative_to(root):
-        raise ValueError('manifest must be outside extensions root')
+    root = validate_root(args.extensions_dir, args.database)
     rows = []
     for path in sorted(root.iterdir()):
         if path.is_symlink():
             raise ValueError(f'symlink refused: {path.name}')
-        if path.name in ('__pycache__', 'example_node.py.example', 'websocket_image_save.py'):
+        if path.name in RESERVED_ENTRIES:
             continue
         if not path.is_dir():
             continue
@@ -169,111 +187,198 @@ def record(args):
     return 0
 
 
-def run(args):
-    if args.command == 'record':
-        return record(args)
-    catalog = load_manifest(args.database.resolve(strict=True))
-    if args.command == 'check':
-        print(f'XLSX valid: {len(catalog)} extensions')
-        return 0
-    root = args.extensions_dir
-    if root.is_symlink():
+def validate_root(directory, database):
+    """Refuse dangerous roots and manifests inside the managed directory."""
+    if directory.is_symlink():
         raise ValueError('symlink root refused')
-    root = root.resolve(strict=True)
-    if not root.is_dir() or root in (Path(root.anchor), Path.home().resolve(), Path.cwd().resolve()):
+    root = directory.resolve(strict=True)
+    if not root.is_dir() or root in (
+        Path(root.anchor), Path.home().resolve(), Path.cwd().resolve()
+    ):
         raise ValueError('unsafe extensions root')
-    if args.database.resolve().is_relative_to(root):
+    if database.resolve().is_relative_to(root):
         raise ValueError('manifest must be outside extensions root')
+    return root
+
+
+def scan_entries(root, catalog):
+    """Inspect immediate children without following symbolic links."""
     entries = {}
-    for p in root.iterdir():
-        if p.is_symlink():
-            raise ValueError(f'symlink refused: {p.name}')
-        if p.name in ('__pycache__', 'example_node.py.example', 'websocket_image_save.py'):
-            if p.name in catalog:
-                raise ValueError(f'reserved name: {p.name}')
+    for path in root.iterdir():
+        if path.is_symlink():
+            raise ValueError(f'symlink refused: {path.name}')
+        if path.name in RESERVED_ENTRIES:
+            if path.name in catalog:
+                raise ValueError(f'reserved name: {path.name}')
             continue
-        entries[p.name] = p
-    changes = [(e, problem(e, root / e.name)) for e in catalog.values()]
-    changes = [(e, reason) for e, reason in changes if reason]
+        entries[path.name] = path
+    return entries
+
+
+def make_plan(root, catalog, command):
+    entries = scan_entries(root, catalog)
+    changes = [
+        (extension, reason)
+        for extension in catalog.values()
+        if (reason := problem(extension, root / extension.name))
+    ]
     extras = sorted(set(entries) - set(catalog))
-    if args.command == 'verify':
-        for e, reason in changes:
-            print(f'INVALID {e.name} ({reason})')
-        for name in extras:
-            print(f'EXTRA {name}')
-        print(f'{len(catalog)-len(changes)} valid, {len(changes)} invalid, {len(extras)} extra')
-        return 0 if args.dry_run else int(bool(changes or extras))
-    installs = changes if args.command in ('update', 'add') else []
-    deletes = extras if args.command in ('update', 'remove') else []
-    matches = len(catalog) - len(changes)
+    installs = changes if command in ('update', 'add') else []
+    deletes = extras if command in ('update', 'remove') else []
     additions = sum(reason == 'missing' for _, reason in installs)
-    replacements = len(installs) - additions
-    print(f'{args.command.upper()}{" (DRY RUN)" if args.dry_run else ""}: {root}', flush=True)
-    print(f'{matches} matches, {len(installs)} installations ({additions} new, {replacements} replacements), {len(deletes)} deletions', flush=True)
-    for e, reason in installs:
-        print(f'INSTALL {e.name} ({reason})')
-    for name in deletes:
+    return SyncPlan(
+        entries=entries,
+        changes=changes,
+        extras=extras,
+        installs=installs,
+        deletes=deletes,
+        matches=len(catalog) - len(changes),
+        additions=additions,
+        replacements=len(installs) - additions,
+    )
+
+
+def show_verify(plan, catalog, dry_run):
+    for extension, reason in plan.changes:
+        print(f'INVALID {extension.name} ({reason})')
+    for name in plan.extras:
+        print(f'EXTRA {name}')
+    print(
+        f'{len(catalog) - len(plan.changes)} valid, '
+        f'{len(plan.changes)} invalid, {len(plan.extras)} extra'
+    )
+    return 0 if dry_run else int(bool(plan.changes or plan.extras))
+
+
+def show_plan(plan, command, root, dry_run):
+    suffix = ' (DRY RUN)' if dry_run else ''
+    print(f'{command.upper()}{suffix}: {root}', flush=True)
+    print(
+        f'{plan.matches} matches, {len(plan.installs)} installations '
+        f'({plan.additions} new, {plan.replacements} replacements), '
+        f'{len(plan.deletes)} deletions',
+        flush=True,
+    )
+    for extension, reason in plan.installs:
+        print(f'INSTALL {extension.name} ({reason})')
+    for name in plan.deletes:
         print(f'DELETE {name}')
-    if args.dry_run:
-        return 0
-    for name in [e.name for e, _ in installs if e.name in entries] + deletes:
-        clean(entries[name])
+
+
+def apply_plan(plan, root, python):
+    """Preflight every affected repository, then delete, install and pip."""
+    for name in [
+        extension.name for extension, _ in plan.installs
+        if extension.name in plan.entries
+    ] + plan.deletes:
+        clean(plan.entries[name])
+
     deleted = installed = replaced = requirements_done = requirements_skipped = 0
     try:
-        # Delete extra repositories before cloning or installing requirements.
-        for name in deletes:
-            clean(entries[name])
-            shutil.rmtree(entries[name])
+        # Keep the existing eager-delete ordering to free storage.
+        for name in plan.deletes:
+            clean(plan.entries[name])
+            shutil.rmtree(plan.entries[name])
             deleted += 1
             print(f'DELETED {name}', flush=True)
-        for e, reason in installs:
-            install(e, root)
+
+        for extension, reason in plan.installs:
+            install(extension, root)
             if reason == 'missing':
                 installed += 1
             else:
                 replaced += 1
-            print(f'COMPLETE {e.name}', flush=True)
-        for ext, _ in installs:
-            if (root / ext.name / 'requirements.txt').is_file():
-                install_requirements(ext, root, args.python)
+            print(f'COMPLETE {extension.name}', flush=True)
+
+        for extension, _ in plan.installs:
+            if (root / extension.name / 'requirements.txt').is_file():
+                install_requirements(extension, root, python)
                 requirements_done += 1
             else:
                 requirements_skipped += 1
     finally:
-        print(f'{matches} matches, {installed} new installations, {replaced} replacements, '
-              f'{deleted} deletions, {requirements_done} requirements installed, '
-              f'{requirements_skipped} without requirements.txt; '
-              f'{len(installs) - installed - replaced} installations pending, '
-              f'{len(deletes) - deleted} deletions pending, '
-              f'{len(installs) - requirements_done - requirements_skipped} requirements checks pending', flush=True)
+        print(
+            f'{plan.matches} matches, {installed} new installations, '
+            f'{replaced} replacements, {deleted} deletions, '
+            f'{requirements_done} requirements installed, '
+            f'{requirements_skipped} without requirements.txt; '
+            f'{len(plan.installs) - installed - replaced} installations pending, '
+            f'{len(plan.deletes) - deleted} deletions pending, '
+            f'{len(plan.installs) - requirements_done - requirements_skipped} '
+            f'requirements checks pending',
+            flush=True,
+        )
+
+
+def run(args):
+    if args.command == 'record':
+        return record(args)
+
+    catalog = load_manifest(args.database.resolve(strict=True))
+    if args.command == 'check':
+        print(f'XLSX valid: {len(catalog)} extensions')
+        return 0
+
+    root = validate_root(args.extensions_dir, args.database)
+    plan = make_plan(root, catalog, args.command)
+    if args.command == 'verify':
+        return show_verify(plan, catalog, args.dry_run)
+
+    show_plan(plan, args.command, root, args.dry_run)
+    if not args.dry_run:
+        apply_plan(plan, root, args.python)
     return 0
 
+
+def resolve_defaults(args):
+    base = Path(__file__).resolve().parent.parent.parent
+    if args.database is None:
+        databases = sorted(path for path in base.glob('comfy-db*') if path.is_dir())
+        if len(databases) != 1:
+            raise ValueError(
+                f'expected exactly one comfy-db* directory; found {len(databases)}'
+            )
+        args.database = databases[0] / 'extension-db.xlsx'
+    if args.database.suffix.lower() != '.xlsx':
+        raise ValueError('manifest must have .xlsx extension')
+    if args.extensions_dir is None:
+        args.extensions_dir = base / 'comfy-extensions'
+    args.python = (
+        args.python or base / 'comfy-ui' / '.venv' / 'bin' / 'python'
+    ).absolute()
+    return args
+
+
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('command', nargs='?', choices=('update','add','remove','verify','check','record'), default='update')
-    p.add_argument('--database', type=Path, help='XLSX manifest (default: extension-db.xlsx in unique ../comfy-db* directory relative to script)')
-    p.add_argument('--directory', dest='extensions_dir', type=Path)
-    p.add_argument('--python', type=Path, help='Python executable for extension requirements (default: ../comfy-ui/.venv/bin/python relative to script)')
-    p.add_argument('--dry-run', action='store_true')
-    a = p.parse_args(argv)
-    if a.command == 'check' and a.dry_run:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        'command', nargs='?',
+        choices=('update', 'add', 'remove', 'verify', 'check', 'record'),
+        default='update',
+    )
+    parser.add_argument(
+        '--database', type=Path,
+        help='XLSX manifest (default: extension-db.xlsx in unique ../comfy-db* directory relative to script)',
+    )
+    parser.add_argument('--directory', dest='extensions_dir', type=Path)
+    parser.add_argument(
+        '--python', type=Path,
+        help='Python executable for extension requirements (default: ../comfy-ui/.venv/bin/python relative to script)',
+    )
+    parser.add_argument('--dry-run', action='store_true')
+
+    args = parser.parse_args(argv)
+    if args.command == 'check' and args.dry_run:
         return 0
     try:
-        base = Path(__file__).resolve().parent.parent.parent
-        if a.database is None:
-            db = sorted(x for x in base.glob('comfy-db*') if x.is_dir())
-            if len(db) != 1:
-                raise ValueError(f'expected exactly one comfy-db* directory; found {len(db)}')
-            a.database = db[0] / 'extension-db.xlsx'
-        if a.database.suffix.lower() != '.xlsx':
-            raise ValueError('manifest must have .xlsx extension')
-        if a.extensions_dir is None:
-            a.extensions_dir = base / 'comfy-extensions'
-        a.python = (a.python or base / 'comfy-ui' / '.venv' / 'bin' / 'python').absolute()
-        return run(a)
-    except (OSError, ValueError, RuntimeError, BadZipFile, ParseError, ImportError, subprocess.CalledProcessError) as e:
-        print(f'Error: {e}', file=sys.stderr)
+        return run(resolve_defaults(args))
+    except (
+        OSError, ValueError, RuntimeError, BadZipFile, ParseError,
+        ImportError, subprocess.CalledProcessError,
+    ) as error:
+        print(f'Error: {error}', file=sys.stderr)
         return 1
+
 
 if __name__ == '__main__':
     sys.exit(main())
