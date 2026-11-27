@@ -14,6 +14,7 @@ from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile
 
 FIELDS = ('Name', 'Link', 'Commit')
+# Built-in ComfyUI entries are excluded from catalog management.
 RESERVED_ENTRIES = frozenset({
     '__pycache__',
     'example_node.py.example',
@@ -22,6 +23,8 @@ RESERVED_ENTRIES = frozenset({
 
 @dataclass(frozen=True)
 class Extension:
+    """Catalog identity, HTTPS origin and exact Git revision."""
+
     name: str
     url: str
     commit: str
@@ -29,6 +32,8 @@ class Extension:
 
 @dataclass
 class SyncPlan:
+    """Observed discrepancies, selected operations and summary counts."""
+
     entries: dict[str, Path]
     changes: list[tuple[Extension, str]]
     extras: list[str]
@@ -40,11 +45,13 @@ class SyncPlan:
 
 
 def load_manifest(path):
+    """Read and validate the first worksheet as a nonempty, commit-pinned catalog."""
     from openpyxl import load_workbook
     result, names = {}, set()
     workbook = load_workbook(path, read_only=True, keep_links=False)
     try:
         rows = workbook.worksheets[0].iter_rows()
+        # Accept reordered, case-insensitive headers but reject additional columns.
         header = [str(cell.value or '').strip().casefold() for cell in next(rows, ())]
         while header and not header[-1]:
             header.pop()
@@ -61,6 +68,7 @@ def load_manifest(path):
                 name, url, commit = (row[k] for k in ('name', 'link', 'commit'))
                 if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', name) or name == '__pycache__':
                     raise ValueError('unsafe extension name')
+                # Reject case-only collisions even on case-sensitive filesystems.
                 if name.casefold() in names:
                     raise ValueError('duplicate extension name')
                 parsed = urlsplit(url)
@@ -76,11 +84,13 @@ def load_manifest(path):
                 raise ValueError(f'XLSX row {number}: {e}') from None
     finally:
         workbook.close()
+    # An empty catalog must not authorize deletion of every managed extension.
     if not result:
         raise ValueError('empty manifest refused as a deletion safeguard')
     return result
 
 def git(path, *args):
+    """Run Git without interactive prompts, repository hooks or local file transport."""
     env = dict(os.environ, GIT_TERMINAL_PROMPT='0')
     completed = subprocess.run(
         ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'protocol.file.allow=never',
@@ -94,18 +104,22 @@ def git(path, *args):
     return completed.stdout.strip()
 
 def repository(path):
+    """Recognize standalone repositories with a real .git directory."""
     return (path / '.git').is_dir() and not (path / '.git').is_symlink()
 
 def clean(path):
+    """Reject destructive operations on repositories containing local or ignored files."""
     if not repository(path):
         raise ValueError(f'not a standalone Git repository: {path.name}')
     if git(path, 'status', '--porcelain', '--untracked-files=all', '--ignored'):
         raise ValueError(f'local changes or ignored files in {path.name}; refusing replacement/removal')
 
 def origin(url):
+    """Normalize trailing slashes and the conventional .git suffix for URL comparison."""
     return url.rstrip('/').removesuffix('.git')
 
 def problem(ext, path):
+    """Return the first catalog mismatch, or None for a matching checkout."""
     if not path.exists():
         return 'missing'
     if not repository(path):
@@ -114,11 +128,13 @@ def problem(ext, path):
         return 'origin mismatch'
     if git(path, 'rev-parse', 'HEAD') != ext.commit:
         return 'commit mismatch'
+    # Verification ignores ignored files; destructive operations use stricter clean().
     if git(path, 'status', '--porcelain', '--untracked-files=all'):
         return 'local changes'
     return None
 
 def install(ext, root):
+    """Stage a pinned checkout and replace the target with rollback on rename failure."""
     target = root / ext.name
     with tempfile.TemporaryDirectory(prefix='.ext-sync-', dir=root) as tmp:
         stage = Path(tmp) / 'repo'
@@ -127,18 +143,21 @@ def install(ext, root):
         git(stage, 'checkout', '--detach', ext.commit)
         if git(stage, 'rev-parse', 'HEAD') != ext.commit:
             raise ValueError('checkout commit mismatch')
+        # Keep the old checkout until the replacement has been fetched and verified.
         backup = Path(tmp) / 'backup'
         if target.exists():
             clean(target)
             target.rename(backup)
         try:
             stage.rename(target)
+        # Restore the previous checkout if publishing the staged repository fails.
         except BaseException:
             if backup.exists():
                 backup.rename(target)
             raise
 
 def install_requirements(ext, root, python):
+    """Install an extension's declared dependencies using the selected interpreter."""
     requirements = root / ext.name / 'requirements.txt'
     if requirements.is_file():
         print(f'REQUIREMENTS {ext.name}', flush=True)
@@ -146,6 +165,7 @@ def install_requirements(ext, root, python):
                        cwd=requirements.parent, check=True)
 
 def record(args):
+    """Capture standalone repositories into a staged XLSX catalog."""
     from openpyxl import Workbook
     destination = args.database.resolve()
     root = validate_root(args.extensions_dir, args.database)
@@ -176,6 +196,7 @@ def record(args):
         sheet.append(FIELDS)
         for row in rows:
             sheet.append(row)
+        # Validate nonempty output before atomically replacing the destination.
         with tempfile.TemporaryDirectory(prefix='.ext-record-', dir=destination.parent) as tmp:
             staged = Path(tmp) / 'catalog.xlsx'
             workbook.save(staged)
@@ -216,6 +237,7 @@ def scan_entries(root, catalog):
 
 
 def make_plan(root, catalog, command):
+    """Compare disk state with the catalog and select operations for the requested mode."""
     entries = scan_entries(root, catalog)
     changes = [
         (extension, reason)
@@ -223,6 +245,7 @@ def make_plan(root, catalog, command):
         if (reason := problem(extension, root / extension.name))
     ]
     extras = sorted(set(entries) - set(catalog))
+    # Add mode never deletes extras; remove mode never installs or replaces entries.
     installs = changes if command in ('update', 'add') else []
     deletes = extras if command in ('update', 'remove') else []
     additions = sum(reason == 'missing' for _, reason in installs)
@@ -239,6 +262,7 @@ def make_plan(root, catalog, command):
 
 
 def show_verify(plan, catalog, dry_run):
+    """Report discrepancies and return failure unless verification is clean or a dry run."""
     for extension, reason in plan.changes:
         print(f'INVALID {extension.name} ({reason})')
     for name in plan.extras:
@@ -251,6 +275,7 @@ def show_verify(plan, catalog, dry_run):
 
 
 def show_plan(plan, command, root, dry_run):
+    """Print the proposed operations and aggregate counts without modifying disk state."""
     suffix = ' (DRY RUN)' if dry_run else ''
     print(f'{command.upper()}{suffix}: {root}', flush=True)
     print(
@@ -267,6 +292,7 @@ def show_plan(plan, command, root, dry_run):
 
 def apply_plan(plan, root, python):
     """Preflight every affected repository, then delete, install and pip."""
+    # Check every affected existing entry before the first destructive operation.
     for name in [
         extension.name for extension, _ in plan.installs
         if extension.name in plan.entries
@@ -290,6 +316,7 @@ def apply_plan(plan, root, python):
                 replaced += 1
             print(f'COMPLETE {extension.name}', flush=True)
 
+        # Install dependencies only after all planned checkouts have succeeded.
         for extension, _ in plan.installs:
             if (root / extension.name / 'requirements.txt').is_file():
                 install_requirements(extension, root, python)
@@ -297,6 +324,7 @@ def apply_plan(plan, root, python):
             else:
                 requirements_skipped += 1
     finally:
+        # Report completed and pending work even when execution fails partway through.
         print(
             f'{plan.matches} matches, {installed} new installations, '
             f'{replaced} replacements, {deleted} deletions, '
@@ -311,6 +339,7 @@ def apply_plan(plan, root, python):
 
 
 def run(args):
+    """Dispatch catalog validation, recording, verification or synchronization."""
     if args.command == 'record':
         return record(args)
 
@@ -331,6 +360,7 @@ def run(args):
 
 
 def resolve_defaults(args):
+    """Resolve omitted CLI paths relative to the workspace and validate the catalog suffix."""
     base = Path(__file__).resolve().parent.parent.parent
     if args.database is None:
         databases = sorted(path for path in base.glob('comfy-db*') if path.is_dir())
@@ -350,6 +380,7 @@ def resolve_defaults(args):
 
 
 def main(argv=None):
+    """Parse command-line options and translate expected failures into exit status 1."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         'command', nargs='?',
@@ -368,6 +399,7 @@ def main(argv=None):
     parser.add_argument('--dry-run', action='store_true')
 
     args = parser.parse_args(argv)
+    # A dry-run catalog check deliberately performs no validation or filesystem access.
     if args.command == 'check' and args.dry_run:
         return 0
     try:
