@@ -34,7 +34,14 @@ if [[ -d "$comfy_dir/models" && ! -d "$model_dir" ]]; then
 fi
 
 set -a; source "$db_dir/token-db.env"; set +a
+.venv/bin/python "$self_dir/comfy-ext-sync.py" sync
 .venv/bin/python "$self_dir/comfy-mod-sync.py" sync
+
+for extension in "$comfy_dir"/custom_nodes/*/; do
+    if [[ -f "$extension/requirements.txt" ]]; then
+        .venv/bin/python -m pip install -r "$extension/requirements.txt"
+    fi
+done
 
 export AUX_ANNOTATOR_CKPTS_PATH="$model_dir/annotators"
 
