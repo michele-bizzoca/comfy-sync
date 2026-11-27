@@ -134,14 +134,19 @@ class ModelTests(WorkspaceTestCase):
 
     def test_case_insensitive_headers_preserve_values(self):
         row = self.row.copy()
-        row[0] = 'MyModel'; row[1] = 'V1-Beta'
-        row[2] = 'Model.BIN'; row[4] = row[4].upper()
-        row[5] = 'CheckPoints'; row[6] = 'https://huggingface.co/Test/resolve/Main/Model.BIN'; row[7] = 'x'
+        row[0] = 'MyModel'
+        row[1] = 'V1-Beta'
+        row[2] = 'Model.BIN'
+        row[4] = row[4].upper()
+        row[5] = 'CheckPoints'
+        row[6] = 'https://huggingface.co/Test/resolve/Main/Model.BIN'
+        row[7] = 'x'
         self.write(row, headers=[field.upper() for field in models.FIELDS])
         model = next(iter(models.load_manifest(self.manifest).values()))
         self.assertEqual((model.name, model.version), ('MyModel', 'V1-Beta'))
         self.assertEqual(str(model.path), 'CheckPoints/Model.BIN')
-        self.assertEqual(model.url, row[6]); self.assertEqual(model.sha256, row[4].lower())
+        self.assertEqual(model.url, row[6])
+        self.assertEqual(model.sha256, row[4].lower())
         self.assertTrue(model.enabled)
         self.assertEqual(self.call('check')[0], 0)
 
@@ -157,11 +162,17 @@ class ModelTests(WorkspaceTestCase):
         self.assertFalse(model.enabled)
 
     def test_case_insensitive_descriptive_duplicate_allowed(self):
-        first = self.row.copy(); first[1] = 'V1-Beta'
-        second = first.copy(); second[0] = 'mODEL'; second[1] = 'v1-beta'; second[2] = 'MODEL.BIN'; second[7] = ''
+        first = self.row.copy()
+        first[1] = 'V1-Beta'
+        second = first.copy()
+        second[0] = 'mODEL'
+        second[1] = 'v1-beta'
+        second[2] = 'MODEL.BIN'
+        second[7] = ''
         self.write(first, second)
         code, out = self.call('check')
-        self.assertEqual(code, 0); self.assertEqual(len(models.load_manifest(self.manifest)), 2)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(models.load_manifest(self.manifest)), 2)
 
     def test_placeholder_identity_in_distinct_folders(self):
         first = self.row.copy()
@@ -196,64 +207,89 @@ class ModelTests(WorkspaceTestCase):
             download.assert_not_called()
 
     def test_case_sensitive_physical_paths(self):
-        second = self.row.copy(); second[0] = 'Other'; second[2] = 'Model.bin'
+        second = self.row.copy()
+        second[0] = 'Other'
+        second[2] = 'Model.bin'
         self.write(self.row, second)
         self.assertEqual(len(models.load_manifest(self.manifest)), 2)
         self.assertEqual(self.call('check')[0], 0)
 
     def test_duplicate_header_ignoring_case(self):
-        headers = list(models.FIELDS); headers[-1] = 'NAME'
+        headers = list(models.FIELDS)
+        headers[-1] = 'NAME'
         self.write(self.row, headers=headers)
         self.assertEqual(self.call('check')[0], 1)
 
     def test_default_and_dry_run(self):
         code, out = self.call('--dry-run')
-        self.assertEqual(code, 0); self.assertIn('UPDATE', out); self.assertIn('DOWNLOAD', out); self.assertIn('DELETE', out)
-        self.assertTrue(self.extra.exists()); self.assertFalse(self.target.exists())
+        self.assertEqual(code, 0)
+        self.assertIn('UPDATE', out)
+        self.assertIn('DOWNLOAD', out)
+        self.assertIn('DELETE', out)
+        self.assertTrue(self.extra.exists())
+        self.assertFalse(self.target.exists())
     def test_add(self):
-        with patch.object(models, 'download', self.fake_download): self.assertEqual(self.call('add')[0], 0)
-        self.assertEqual(self.target.read_bytes(), self.data); self.assertTrue(self.extra.exists())
+        with patch.object(models, 'download', self.fake_download):
+            self.assertEqual(self.call('add')[0], 0)
+        self.assertEqual(self.target.read_bytes(), self.data)
+        self.assertTrue(self.extra.exists())
     def test_remove(self):
-        self.assertEqual(self.call('remove')[0], 0); self.assertFalse(self.extra.exists()); self.assertFalse(self.target.exists())
+        self.assertEqual(self.call('remove')[0], 0)
+        self.assertFalse(self.extra.exists())
+        self.assertFalse(self.target.exists())
     def test_sync(self):
-        with patch.object(models, 'download', self.fake_download): self.assertEqual(self.call()[0], 0)
-        self.assertFalse(self.extra.exists()); self.assertEqual(self.target.read_bytes(), self.data)
+        with patch.object(models, 'download', self.fake_download):
+            self.assertEqual(self.call()[0], 0)
+        self.assertFalse(self.extra.exists())
+        self.assertEqual(self.target.read_bytes(), self.data)
     def test_verify(self):
         self.target.write_bytes(b'evil')
         self.assertNotIn('DOWNLOAD', self.call('add', '--dry-run')[1])
         with patch.object(models, 'download') as download:
             code, out = self.call('verify')
             download.assert_not_called()
-        self.assertEqual(code, 1); self.assertIn('SHA-256 mismatch', out)
-        self.assertIn('EXTRA', out); self.assertEqual(self.target.read_bytes(), b'evil'); self.assertTrue(self.extra.exists())
+        self.assertEqual(code, 1)
+        self.assertIn('SHA-256 mismatch', out)
+        self.assertIn('EXTRA', out)
+        self.assertEqual(self.target.read_bytes(), b'evil')
+        self.assertTrue(self.extra.exists())
     def test_verify_clean(self):
-        self.target.write_bytes(self.data); self.extra.unlink()
+        self.target.write_bytes(self.data)
+        self.extra.unlink()
         code, out = self.call('verify')
-        self.assertEqual(code, 0); self.assertIn('1 valid', out)
+        self.assertEqual(code, 0)
+        self.assertIn('1 valid', out)
     def test_verify_missing(self):
         code, out = self.call('verify')
-        self.assertEqual(code, 1); self.assertIn('(missing)', out)
-        self.assertFalse(self.target.exists()); self.assertTrue(self.extra.exists())
+        self.assertEqual(code, 1)
+        self.assertIn('(missing)', out)
+        self.assertFalse(self.target.exists())
+        self.assertTrue(self.extra.exists())
     def test_verify_dry_run_missing(self):
         with patch.object(models, 'problem') as problem, patch.object(models, 'sha256') as sha:
             code, out = self.call('verify', '--dry-run')
-            problem.assert_not_called(); sha.assert_not_called()
+            problem.assert_not_called()
+            sha.assert_not_called()
         self.assertEqual(code, 0)
         self.assertIn('MISSING  checkpoints/model.bin', out)
         self.assertIn('EXTRA    extra.bin', out)
         self.assertIn('0 files to verify', out)
-        self.assertFalse(self.target.exists()); self.assertTrue(self.extra.exists())
+        self.assertFalse(self.target.exists())
+        self.assertTrue(self.extra.exists())
     def test_verify_dry_run_present(self):
         self.target.write_bytes(b'evil')
         with patch.object(models, 'problem') as problem, patch.object(models, 'sha256') as sha, patch.object(models, 'download') as download:
             code, out = self.call('verify', '--dry-run')
-            problem.assert_not_called(); sha.assert_not_called(); download.assert_not_called()
+            problem.assert_not_called()
+            sha.assert_not_called()
+            download.assert_not_called()
         self.assertEqual(code, 0)
         self.assertIn('VERIFY (DRY RUN)', out)
         self.assertIn('VERIFY   checkpoints/model.bin', out)
         self.assertIn('1 files to verify', out)
         self.assertNotIn('SHA-256 mismatch', out)
-        self.assertEqual(self.target.read_bytes(), b'evil'); self.assertTrue(self.extra.exists())
+        self.assertEqual(self.target.read_bytes(), b'evil')
+        self.assertTrue(self.extra.exists())
     def test_failed_download_deletes_extras_first(self):
         with patch.object(models, "download", side_effect=ValueError("failure")):
             code, output = self.call("update")
@@ -262,7 +298,9 @@ class ModelTests(WorkspaceTestCase):
         self.assertFalse(self.target.exists())
     def test_bad_manifest(self):
         for rows in ([], [self.row, self.row], [self.row[:5]+['../escape', *self.row[6:]]]):
-            self.write(*rows); self.assertEqual(self.call('remove')[0], 1); self.assertTrue(self.extra.exists())
+            self.write(*rows)
+            self.assertEqual(self.call('remove')[0], 1)
+            self.assertTrue(self.extra.exists())
     def test_download_atomic(self):
         model = next(iter(models.load_manifest(self.manifest).values()))
         self.target.write_bytes(b"old")
@@ -328,7 +366,8 @@ class ModelTests(WorkspaceTestCase):
 
     def test_symlink(self):
         (self.root / 'link').symlink_to(self.manifest)
-        self.assertEqual(self.call('remove')[0], 1); self.assertTrue(self.extra.exists())
+        self.assertEqual(self.call('remove')[0], 1)
+        self.assertTrue(self.extra.exists())
 
     def automatic_layout(self):
         script_dir = self.base / 'model-sync' / 'python'
@@ -353,28 +392,33 @@ class ModelTests(WorkspaceTestCase):
         (db / '~$model-db.xlsx').touch()
         code, out = self.auto_call(script, 'update', '--dry-run')
         self.assertEqual(code, 0, out)
-        self.assertIn('DOWNLOAD', out); self.assertIn('DELETE', out)
+        self.assertIn('DOWNLOAD', out)
+        self.assertIn('DELETE', out)
         self.assertTrue(self.extra.exists())
 
     def test_missing_database(self):
         script, db, path = self.automatic_layout()
-        path.unlink(); db.rmdir()
+        path.unlink()
+        db.rmdir()
         code, out = self.auto_call(script, 'remove')
-        self.assertEqual(code, 1); self.assertIn('found 0', out)
+        self.assertEqual(code, 1)
+        self.assertIn('found 0', out)
         self.assertTrue(self.extra.exists())
 
     def test_multiple_databases(self):
         script, _, _ = self.automatic_layout()
         (self.base / 'comfy-db-other').mkdir()
         code, out = self.auto_call(script, 'remove')
-        self.assertEqual(code, 1); self.assertIn('found 2', out)
+        self.assertEqual(code, 1)
+        self.assertIn('found 2', out)
         self.assertTrue(self.extra.exists())
 
     def test_missing_xlsx(self):
         script, _, path = self.automatic_layout()
         path.unlink()
         code, out = self.auto_call(script, 'remove')
-        self.assertEqual(code, 1); self.assertIn('model-db.xlsx', out)
+        self.assertEqual(code, 1)
+        self.assertIn('model-db.xlsx', out)
         self.assertTrue(self.extra.exists())
 
     def test_multiple_xlsxs(self):
@@ -394,14 +438,16 @@ class ModelTests(WorkspaceTestCase):
         script, _, _ = self.automatic_layout()
         other = self.base / 'other-models'
         code, out = self.auto_call(script, '--directory', str(other), '--dry-run')
-        self.assertEqual(code, 0, out); self.assertIn(str(other), out)
+        self.assertEqual(code, 0, out)
+        self.assertIn(str(other), out)
         self.assertFalse(other.exists())
 
     def test_missing_default_models_dir(self):
         script, _, _ = self.automatic_layout()
         self.root.rename(self.base / 'moved-models')
         code, out = self.auto_call(script, 'update')
-        self.assertEqual(code, 1); self.assertIn('default models directory', out)
+        self.assertEqual(code, 1)
+        self.assertIn('default models directory', out)
         self.assertFalse(self.root.exists())
 
     def test_token_file_and_environment_precedence(self):
@@ -433,6 +479,42 @@ class ModelTests(WorkspaceTestCase):
             self.assertEqual(tokens["TOKEN_CA"], "second")
             self.assertEqual(models.auth_token("https://www.civitai.red/api/download/1"), "second")
 
+    def test_redirect_strips_cross_origin_authorization(self):
+        class Response:
+            def __init__(self, status, headers=None):
+                self.status_code = status
+                self.headers = headers or {}
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        class Client:
+            def __init__(self, responses):
+                self.responses = iter(responses)
+                self.requests = []
+
+            def build_request(self, method, url, headers):
+                return method, url, dict(headers)
+
+            def send(self, request, stream):
+                self.requests.append(request)
+                return next(self.responses)
+
+        redirected = Response(302, {"location": "https://cdn.example.org/file"})
+        final = Response(200)
+        client = Client([redirected, final])
+        headers = {"Authorization": "Bearer secret", "Range": "bytes=0-0"}
+        self.assertIs(models.stream(client, "https://civitai.red/file", headers), final)
+        self.assertTrue(redirected.closed)
+        self.assertEqual(client.requests[0][2]["Authorization"], "Bearer secret")
+        self.assertNotIn("Authorization", client.requests[1][2])
+        self.assertEqual(client.requests[1][2]["Range"], "bytes=0-0")
+
+        same_origin = Client([Response(302, {"location": "/another"}), Response(200)])
+        models.stream(same_origin, "https://civitai.red/file", headers)
+        self.assertEqual(same_origin.requests[1][2]["Authorization"], "Bearer secret")
+
     def test_authentication_restricted_to_known_hosts(self):
         for url, expected in (
             ("https://civitai.com/models/1", "TOKEN_CA"),
@@ -456,7 +538,8 @@ class ModelTests(WorkspaceTestCase):
         (self.base / 'comfy-db-two').mkdir()
         with patch.dict(os.environ, {}, clear=True), patch.object(models, 'download') as download:
             code, out = self.auto_call(script, 'update')
-            self.assertEqual(code, 1); self.assertIn('found 3', out)
+            self.assertEqual(code, 1)
+            self.assertIn('found 3', out)
             download.assert_not_called()
             self.assertTrue(self.extra.exists())
             self.assertEqual(self.auto_call(script, 'update', '--dry-run')[0], 1)
@@ -482,7 +565,8 @@ class ModelTests(WorkspaceTestCase):
             self.assertTrue(self.target.exists())
             self.assertEqual(self.call('update')[0], 0)
             download.assert_not_called()
-        self.assertFalse(self.target.exists()); self.assertFalse(self.extra.exists())
+        self.assertFalse(self.target.exists())
+        self.assertFalse(self.extra.exists())
 
     def test_disabled_model_add(self):
         self.write(self.row[:-1] + [''])
@@ -492,7 +576,8 @@ class ModelTests(WorkspaceTestCase):
             self.target.write_bytes(self.data)
             self.assertEqual(self.call('add')[0], 0)
             download.assert_not_called()
-        self.assertTrue(self.target.exists()); self.assertTrue(self.extra.exists())
+        self.assertTrue(self.target.exists())
+        self.assertTrue(self.extra.exists())
 
     def test_disabled_model_remove(self):
         self.target.write_bytes(self.data)
@@ -545,7 +630,8 @@ class ModelTests(WorkspaceTestCase):
         other.write_bytes(self.data)
         with patch.object(models, 'download', self.fake_download):
             self.assertEqual(self.call('update')[0], 0)
-        self.assertTrue(self.target.exists()); self.assertFalse(other.exists())
+        self.assertTrue(self.target.exists())
+        self.assertFalse(other.exists())
 
     def test_record_models(self):
         old = self.row.copy()
@@ -555,13 +641,13 @@ class ModelTests(WorkspaceTestCase):
         self.write(old, missing)
         self.target.write_bytes(b'changed')
         self.assertEqual(self.call('record')[0], 0)
-        models = models.load_manifest(self.manifest)
-        self.assertEqual(len(models), 2)
-        known = models[models.PurePosixPath('checkpoints/model.bin')]
+        catalog = models.load_manifest(self.manifest)
+        self.assertEqual(len(catalog), 2)
+        known = catalog[models.PurePosixPath('checkpoints/model.bin')]
         self.assertTrue(known.enabled)
         self.assertEqual((known.name, known.version, known.size, known.sha256, known.url),
                          (old[0], old[1], int(old[3]), old[4], old[6]))
-        new = models[models.PurePosixPath('extra.bin')]
+        new = catalog[models.PurePosixPath('extra.bin')]
         self.assertEqual((new.name, new.version, new.url), ('?', '?', '?'))
         self.assertEqual(new.size, len(b'extra'))
         self.assertEqual(new.sha256, hashlib.sha256(b'extra').hexdigest())
@@ -591,7 +677,9 @@ class ModelTests(WorkspaceTestCase):
                 code = models.main(['check', '--database', str(self.manifest)])
             self.assertEqual(code, 0)
             self.assertIn('2 entries, 1 enabled, 1 disabled', out.getvalue())
-            scan.assert_not_called(); download.assert_not_called(); token.assert_not_called()
+            scan.assert_not_called()
+            download.assert_not_called()
+            token.assert_not_called()
         self.assertTrue(self.extra.exists())
 
     def test_check_invalid(self):
@@ -607,7 +695,9 @@ class ModelTests(WorkspaceTestCase):
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
                 self.assertEqual(models.main(['check', '--dry-run']), 0)
                 self.assertEqual(models.main(['check', '--dry-run', '--database', '/missing.xlsx']), 0)
-            defaults.assert_not_called(); load.assert_not_called(); scan.assert_not_called()
+            defaults.assert_not_called()
+            load.assert_not_called()
+            scan.assert_not_called()
         self.assertEqual(out.getvalue(), '')
 
 
