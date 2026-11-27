@@ -1,4 +1,4 @@
-# Comfy Managers
+# Comfy Sync
 
 A Linux deployment and inventory toolkit for ComfyUI. The database describes the desired installation; the managed directories contain its actual state. Setup provisions an installation, Update reconciles it, Record captures it, and Start launches it.
 
@@ -8,7 +8,7 @@ All paths below are relative to the parent of this repository, not the shell's w
 
 ```text
 workspace/
-  comfy-managers/
+  comfy-sync/
     comfy-setup.sh
     comfy-update.sh
     comfy-record.sh
