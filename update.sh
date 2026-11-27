@@ -17,7 +17,7 @@ status=0
 sync_extensions() {
     export PIP_CONSTRAINT="$comfy_dir/.venv/comfy-constraints.txt"
     [[ -f "$PIP_CONSTRAINT" ]] || { echo "Missing pip constraints; run setup first" >&2; return 1; }
-    "$py" "$self_dir/comfy-sync-extensions.py" update
+    "$py" "$self_dir/sync-extensions.py" update
 }
 
 sync_config() {
@@ -51,7 +51,7 @@ check_versions() (
 )
 
 sync_extensions || { echo "Extension sync failed" >&2; status=1; }
-"$py" "$self_dir/comfy-sync-models.py" update || { echo "Model sync failed" >&2; status=1; }
+"$py" "$self_dir/sync-models.py" update || { echo "Model sync failed" >&2; status=1; }
 sync_config || { echo "Configuration sync failed" >&2; status=1; }
 if ! check_versions; then
     printf '\n============================================================\nERROR: VERSION MISMATCH OR VERIFICATION FAILURE\nCHECK COMFYUI, PYTHON AND TORCH AGAINST VERSION-DB.\nNO AUTOMATIC VERSION UPDATE HAS BEEN PERFORMED.\n============================================================\n' >&2

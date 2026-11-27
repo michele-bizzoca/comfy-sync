@@ -99,7 +99,7 @@ import sys
 from pathlib import Path
 Path(sys.argv[1]).write_text("managed_extensions:\n  is_default: true\n  custom_nodes: " + json.dumps(sys.argv[2]) + "\n", encoding="utf-8")
 PY
-"$py" "$self_dir/comfy-sync-extensions.py" update
+"$py" "$self_dir/sync-extensions.py" update
 "$py" -m pip check
 "$py" - "$TORCH_VERSION" "$required_cuda" <<'PY'
 import sys
@@ -111,5 +111,5 @@ if not torch.cuda.is_available():
 torch.zeros(1, device="cuda").add_(1)
 torch.cuda.synchronize()
 PY
-"$py" "$self_dir/comfy-sync-models.py" update
+"$py" "$self_dir/sync-models.py" update
 cp "$db_dir/config-db.json" "$comfy_dir/user/default/comfy.settings.json"

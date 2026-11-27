@@ -9,12 +9,12 @@ All paths below are relative to the parent of this repository, not the shell's w
 ```text
 workspace/
   comfy-sync/
-    comfy-setup.sh
-    comfy-update.sh
-    comfy-record.sh
-    comfy-start.sh
-    comfy-sync-models.py
-    comfy-sync-extensions.py
+    setup.sh
+    update.sh
+    record.sh
+    start.sh
+    sync-models.py
+    sync-extensions.py
     requirements.txt
     test.py
   comfy-db-main/
@@ -40,15 +40,15 @@ Exactly one sibling directory matching `comfy-db*` is required for automatic dis
 Requirements: Linux (Setup targets Debian/Ubuntu with apt and dpkg), Bash, Git, NVIDIA driver, network access, Python with venv support, sufficient storage, and valid database files. The Python managers require openpyxl >=3.1,<4.
 
 ```sh
-bash comfy-setup.sh
-bash comfy-start.sh 8188
+bash setup.sh
+bash start.sh 8188
 ```
 
 For an existing installation:
 
 ```sh
-bash comfy-update.sh
-bash comfy-record.sh
+bash update.sh
+bash record.sh
 ```
 
 Record changes the database, not the installation. Review its output and fill unknown model metadata before deploying elsewhere. No shell script automatically commits or pushes the database.
@@ -168,8 +168,8 @@ The model parser accepts arbitrary valid environment variable names, blank lines
 ## Python command reference
 
 ```sh
-python comfy-sync-models.py [update|add|remove|verify|check|record] [options]
-python comfy-sync-extensions.py [update|add|remove|verify|check|record] [options]
+python sync-models.py [update|add|remove|verify|check|record] [options]
+python sync-extensions.py [update|add|remove|verify|check|record] [options]
 ```
 
 | Mode | Models | Extensions |
@@ -194,36 +194,36 @@ Explicit paths are interpreted relative to the invoking working directory if not
 Examples:
 
 ```sh
-python comfy-sync-models.py check
-python comfy-sync-models.py update --dry-run
-python comfy-sync-models.py verify
-python comfy-sync-models.py record --database /tmp/model-db.xlsx
-python comfy-sync-extensions.py add --python ../comfy-ui/.venv/bin/python
-python comfy-sync-extensions.py verify --directory ../comfy-extensions
+python sync-models.py check
+python sync-models.py update --dry-run
+python sync-models.py verify
+python sync-models.py record --database /tmp/model-db.xlsx
+python sync-extensions.py add --python ../comfy-ui/.venv/bin/python
+python sync-extensions.py verify --directory ../comfy-extensions
 ```
 
 Exit status: 0 success (including dry-run plans), 1 operational/validation failure or real verify discrepancies, 2 argparse usage errors.
 
 ## Shell managers
 
-### comfy-setup.sh
+### setup.sh
 
 Provisions the installation from the database. Checks driver compatibility, fetches/checks out ComfyUI release, moves initial models/custom_nodes/input/output directories out when applicable, creates managed directories and venv, checks existing Torch, torchvision and torchaudio before installing pinned CUDA Torch, then installs requirements plus additional runtime dependencies, writes Torch constraints and extension-path YAML inside comfy-ui, updates extensions, runs pip check and CUDA smoke test, updates models and copies settings. Stops on error. If all three Torch packages import successfully, Torch and CUDA versions match the database, and declared Torch dependencies of torchvision and torchaudio are satisfied, Setup skips both wheel-resolution dry-run and Torch installation. Otherwise it runs the original resolution and installation steps. The final CUDA smoke test and pip check still run. Setup can generally be rerun after completed stages, but recovery from an interrupted command is not guaranteed. Not a transactional installer; back up existing installations before running.
 
-### comfy-update.sh
+### update.sh
 
 Uses the existing venv and Torch constraints. Updates extensions and models, copies settings from database, then checks ComfyUI/Python/Torch versions. Attempts subsequent stages even if an earlier stage fails; returns nonzero if any stage fails. Does not automatically upgrade core versions. A version mismatch is reported after reconciliation, not as a preflight guard.
 
-### comfy-record.sh
+### record.sh
 
 Reverse inventory operation: checks local release tag and actual venv versions, stages existing model/extension catalogs, invokes both record modes, copies installed settings and writes version-db.env. Publishes all four staged files only after successful preparation. Each file replacement is atomic, but the four replacements are not one transaction. Token file is unchanged. No dry-run option on the shell wrapper; use individual Python record dry-runs to preview. Stop ComfyUI or avoid concurrent modifications during capture.
 
-### comfy-start.sh
+### start.sh
 
 Launches ComfyUI with the venv interpreter, external model/input/output directories, generated extension-path YAML, manager enabled, automatic previews and DETAIL verbosity. Sources and exports token-db.env. Optional first positional argument sets port (default 8188). Binds to 0.0.0.0; use firewall/access controls rather than exposing the service directly to the internet.
 
 ```sh
-bash comfy-start.sh 8190
+bash start.sh 8190
 ```
 
 ## Maintenance and safety
@@ -242,14 +242,14 @@ bash comfy-start.sh 8190
 ```sh
 python -m pip install -r requirements.txt
 python -m unittest -v test
-bash -n comfy-setup.sh comfy-update.sh comfy-record.sh comfy-start.sh
+bash -n setup.sh update.sh record.sh start.sh
 ```
 
 Validate real catalogs without modifying them:
 
 ```sh
-python comfy-sync-models.py check --database ../comfy-db-main/model-db.xlsx
-python comfy-sync-extensions.py check --database ../comfy-db-main/extension-db.xlsx
+python sync-models.py check --database ../comfy-db-main/model-db.xlsx
+python sync-extensions.py check --database ../comfy-db-main/extension-db.xlsx
 ```
 
 The unit suite covers catalog validation, discovery, dry-run, record, download handling, extension reconciliation and requirements interpreter selection. A real GPU deployment and shell integration tests are separate from the Python unit suite.
