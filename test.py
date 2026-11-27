@@ -53,7 +53,7 @@ class Tests(unittest.TestCase):
     def call(self, *args):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            status = m.main([*args, '--xlsx', str(self.manifest), '--models-dir', str(self.root)])
+            status = m.main([*args, '--xlsx', str(self.manifest), '--directory', str(self.root)])
         return status, out.getvalue()
     def fake_download(self, model, root):
         root.joinpath(*model.path.parts).write_bytes(self.data)
@@ -277,7 +277,7 @@ class Tests(unittest.TestCase):
     def test_explicit_models_dir_overrides_default(self):
         script, _, _ = self.automatic_layout()
         other = self.base / 'other-models'
-        code, out = self.auto_call(script, '--models-dir', str(other), '--dry-run')
+        code, out = self.auto_call(script, '--directory', str(other), '--dry-run')
         self.assertEqual(code, 0, out); self.assertIn(str(other), out)
         self.assertFalse(other.exists())
 
@@ -451,7 +451,7 @@ class ExtensionTests(unittest.TestCase):
     def call(self, *args):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            code = self.ext.main([*args, '--xlsx', str(self.xlsx), '--extensions-dir', str(self.root)])
+            code = self.ext.main([*args, '--xlsx', str(self.xlsx), '--directory', str(self.root)])
         return code, out.getvalue()
 
     def test_check(self):

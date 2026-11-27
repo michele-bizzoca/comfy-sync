@@ -175,7 +175,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('command', nargs='?', choices=('sync','add','remove','verify','check'), default='sync')
     p.add_argument('--xlsx', type=Path)
-    p.add_argument('--extensions-dir', '--custom-nodes-dir', type=Path)
+    p.add_argument('--directory', dest='extensions_dir', type=Path)
     p.add_argument('--dry-run', action='store_true')
     a = p.parse_args(argv)
     if a.command == 'check' and a.dry_run:

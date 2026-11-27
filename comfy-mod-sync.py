@@ -363,7 +363,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, epilog="Credentials: CA_TOKEN and HF_TOKEN in the environment, or token-db.env in a unique ../comfy-db* directory relative to the script.")
     parser.add_argument('command', nargs='?', choices=('sync', 'add', 'remove', 'verify', 'check'), default='sync', help='default: sync; verify checks model files; check validates the XLSX only')
     parser.add_argument('--xlsx', type=Path, help='XLSX manifest (default: model-db.xlsx in unique ../comfy-db* directory relative to script)')
-    parser.add_argument('--models-dir', '--models-directory', type=Path, help='dedicated models root (default: ../comfy-models relative to script)')
+    parser.add_argument('--directory', dest='models_dir', type=Path, help='dedicated models root (default: ../comfy-models relative to script)')
     parser.add_argument('--dry-run', action='store_true', help='print the plan without writes, downloads or hash checks; check --dry-run does nothing')
     args = parser.parse_args(argv)
     if args.command == 'check' and args.dry_run:
