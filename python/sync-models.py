@@ -6,6 +6,7 @@ identifier, may contain ? placeholders, and need not be unique. Link may be ?
 when the download URL is unknown; a required download then fails explicitly.
 """
 import argparse
+from contextlib import closing
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -249,7 +250,7 @@ def transfer(model, temp, state_path, scratch, connections):
             state = {}
         if state.get('complete'):
             return
-        with stream(client, model.url, dict(headers, Range='bytes=0-0')) as probe:
+        with closing(stream(client, model.url, dict(headers, Range='bytes=0-0'))) as probe:
             match = re.fullmatch(r'bytes 0-0/([0-9]+)', probe.headers.get('content-range', ''))
             etag = probe.headers.get('etag')
             if etag and etag.startswith('W/'):
@@ -263,7 +264,7 @@ def transfer(model, temp, state_path, scratch, connections):
         if total is None:
             # No ranges: restart this transfer, never append an unverified response.
             save({'identity': identity})
-            with stream(client, model.url, headers) as response:
+            with closing(stream(client, model.url, headers)) as response:
                 if response.status_code != 200:
                     raise DownloadError(f'HTTP {response.status_code}')
                 length = response.headers.get('content-length', '')
@@ -301,7 +302,7 @@ def transfer(model, temp, state_path, scratch, connections):
                     request_headers['If-Range'] = etag
                 for attempt in range(3):
                     try:
-                        with stream(client, model.url, request_headers) as response:
+                        with closing(stream(client, model.url, request_headers)) as response:
                             if response.status_code != 206 or response.headers.get('content-range') != f'bytes {lo}-{hi}/{total}':
                                 raise DownloadError('range response mismatch')
                             if etag and response.headers.get('etag') not in (None, etag):
