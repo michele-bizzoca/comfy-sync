@@ -113,6 +113,13 @@ def install(ext, root):
                 backup.rename(target)
             raise
 
+def install_requirements(ext, root):
+    requirements = root / ext.name / 'requirements.txt'
+    if requirements.is_file():
+        print(f'REQUIREMENTS {ext.name}', flush=True)
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '-r', str(requirements)],
+                       cwd=requirements.parent, check=True)
+
 def run(args):
     catalog = load_manifest(args.xlsx.resolve(strict=True))
     if args.command == 'check':
@@ -157,6 +164,9 @@ def run(args):
         clean(entries[name])
     for e, _ in installs:
         install(e, root)
+    if args.command in ('sync', 'add'):
+        for ext in catalog.values():
+            install_requirements(ext, root)
     for name in deletes:
         clean(entries[name])
         shutil.rmtree(entries[name])
@@ -183,7 +193,7 @@ def main(argv=None):
         if a.extensions_dir is None:
             a.extensions_dir = base / 'comfy-ui' / 'custom_nodes'
         return run(a)
-    except (OSError, ValueError, RuntimeError, BadZipFile, ParseError, ImportError) as e:
+    except (OSError, ValueError, RuntimeError, BadZipFile, ParseError, ImportError, subprocess.CalledProcessError) as e:
         print(f'Error: {e}', file=sys.stderr)
         return 1
 
