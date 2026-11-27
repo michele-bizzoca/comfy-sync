@@ -37,11 +37,6 @@ set -a; source "$db_dir/token-db.env"; set +a
 .venv/bin/python "$self_dir/comfy-ext-sync.py" sync
 .venv/bin/python "$self_dir/comfy-mod-sync.py" sync
 
-for extension in "$comfy_dir"/custom_nodes/*/; do
-    if [[ -f "$extension/requirements.txt" ]]; then
-        .venv/bin/python -m pip install -r "$extension/requirements.txt"
-    fi
-done
 
 exec .venv/bin/python main.py --preview-method auto      \
      --enable-manager --listen 0.0.0.0 --port "${1:-8188}" \
