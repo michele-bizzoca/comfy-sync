@@ -43,8 +43,6 @@ for extension in "$comfy_dir"/custom_nodes/*/; do
     fi
 done
 
-export AUX_ANNOTATOR_CKPTS_PATH="$model_dir/annotators"
-
 exec .venv/bin/python main.py --preview-method auto      \
      --enable-manager --listen 0.0.0.0 --port "${1:-8188}" \
      --verbose DETAIL --models-directory "$model_dir"
