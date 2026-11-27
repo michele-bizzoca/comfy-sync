@@ -62,6 +62,7 @@ fi
 "python$PYTHON_VERSION" -m venv "$comfy_dir/.venv"
 py="$comfy_dir/.venv/bin/python"
 "$py" -c 'import sys; assert ".".join(map(str, sys.version_info[:2])) == sys.argv[1], "Python version mismatch"' "$PYTHON_VERSION"
+"$py" -m pip install --upgrade pip
 "$py" -m pip install --dry-run --ignore-installed --only-binary=:all: "torch==$TORCH_VERSION" torchvision torchaudio --index-url "https://download.pytorch.org/whl/$cuda_tag" || { echo "No compatible Torch wheels for requested Python and CUDA" >&2; exit 1; }
 "$py" -m pip install "torch==$TORCH_VERSION" torchvision torchaudio --index-url "https://download.pytorch.org/whl/$cuda_tag"
 printf 'torch==%s\n' "$TORCH_VERSION" > "$comfy_dir/.venv/comfy-constraints.txt"
