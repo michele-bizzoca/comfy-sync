@@ -164,14 +164,14 @@ def load_token_file(script_dir):
             line = line.strip()
             if not line or line.startswith('#'):
                 continue
+            if line.startswith(('export ', 'export\t')):
+                line = line[6:].lstrip()
             key, sep, value = line.partition('=')
             key, value = key.strip(), value.strip()
-            if not sep or key not in ('CA_TOKEN', 'HF_TOKEN') or key in tokens:
-                raise ValueError(f'invalid or duplicate token entry in token-db.env, line {number}')
+            if not sep or not key or not key.isascii() or not (key[0].isalpha() or key[0] == '_') or not all(c.isalnum() or c == '_' for c in key):
+                raise ValueError(f'invalid environment assignment in token-db.env, line {number}')
             if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
                 value = value[1:-1]
-            if any(c.isspace() for c in value) or any(c in value for c in ('"', "'")):
-                raise ValueError(f'invalid token value in token-db.env, line {number}')
             tokens[key] = value
     return tokens
 
