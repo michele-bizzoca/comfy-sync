@@ -120,7 +120,58 @@ def install_requirements(ext, root, python):
         subprocess.run([str(python), '-m', 'pip', 'install', '-r', str(requirements)],
                        cwd=requirements.parent, check=True)
 
+def record(args):
+    from openpyxl import Workbook
+    root = args.extensions_dir
+    if root.is_symlink():
+        raise ValueError('symlink root refused')
+    root = root.resolve(strict=True)
+    if not root.is_dir() or root in (Path(root.anchor), Path.home().resolve(), Path.cwd().resolve()):
+        raise ValueError('unsafe extensions root')
+    destination = args.database.resolve()
+    if destination.is_relative_to(root):
+        raise ValueError('manifest must be outside extensions root')
+    rows = []
+    for path in sorted(root.iterdir()):
+        if path.is_symlink():
+            raise ValueError(f'symlink refused: {path.name}')
+        if path.name in ('__pycache__', 'example_node.py.example', 'websocket_image_save.py'):
+            continue
+        if not path.is_dir():
+            continue
+        if not repository(path):
+            print(f'SKIP {path.name}: not a standalone Git repository', file=sys.stderr)
+            continue
+        try:
+            url = git(path, 'remote', 'get-url', 'origin')
+        except RuntimeError:
+            print(f'SKIP {path.name}: cannot read Git origin', file=sys.stderr)
+            continue
+        commit = git(path, 'rev-parse', 'HEAD')
+        rows.append((path.name, url, commit))
+        print(f'RECORD {path.name}')
+    if args.dry_run:
+        return 0
+    workbook = Workbook()
+    try:
+        sheet = workbook.active
+        sheet.append(FIELDS)
+        for row in rows:
+            sheet.append(row)
+        with tempfile.TemporaryDirectory(prefix='.ext-record-', dir=destination.parent) as tmp:
+            staged = Path(tmp) / 'catalog.xlsx'
+            workbook.save(staged)
+            if rows:
+                load_manifest(staged)
+            os.replace(staged, destination)
+    finally:
+        workbook.close()
+    return 0
+
+
 def run(args):
+    if args.command == 'record':
+        return record(args)
     catalog = load_manifest(args.database.resolve(strict=True))
     if args.command == 'check':
         print(f'XLSX valid: {len(catalog)} extensions')
@@ -173,7 +224,7 @@ def run(args):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('command', nargs='?', choices=('sync','add','remove','verify','check'), default='sync')
+    p.add_argument('command', nargs='?', choices=('sync','add','remove','verify','check','record'), default='sync')
     p.add_argument('--database', type=Path, help='XLSX manifest (default: extension-db.xlsx in unique ../comfy-db* directory relative to script)')
     p.add_argument('--directory', dest='extensions_dir', type=Path)
     p.add_argument('--python', type=Path, help='Python executable for extension requirements (default: ../comfy-ui/.venv/bin/python relative to script)')

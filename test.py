@@ -587,6 +587,34 @@ class ExtensionTests(unittest.TestCase):
         with patch.object(self.ext, 'git', side_effect=[ext.url, ext.commit, '']):
             self.assertIsNone(self.ext.problem(ext, target))
 
+    def test_record(self):
+        target = self.root / 'Example'
+        target.mkdir()
+        (target / '.git').mkdir()
+        (self.root / 'nonrepo').mkdir()
+        with patch.object(self.ext, 'git', side_effect=[self.row[1], self.row[2]]):
+            self.assertEqual(self.call('record')[0], 0)
+        model = self.ext.load_manifest(self.xlsx)['Example']
+        self.assertEqual((model.name, model.url, model.commit), tuple(self.row))
+
+    def test_record_dry_run(self):
+        original = self.xlsx.read_bytes()
+        target = self.root / 'Example'
+        target.mkdir()
+        (target / '.git').mkdir()
+        with patch.object(self.ext, 'git', side_effect=[self.row[1], self.row[2]]):
+            self.assertEqual(self.call('record', '--dry-run')[0], 0)
+        self.assertEqual(self.xlsx.read_bytes(), original)
+
+    def test_record_new_database(self):
+        self.xlsx.unlink()
+        target = self.root / 'Example'
+        target.mkdir()
+        (target / '.git').mkdir()
+        with patch.object(self.ext, 'git', side_effect=[self.row[1], self.row[2]]):
+            self.assertEqual(self.call('record')[0], 0)
+        self.assertTrue(self.xlsx.is_file())
+
     def test_requirements_python(self):
         target = self.root / 'Example'
         target.mkdir()
