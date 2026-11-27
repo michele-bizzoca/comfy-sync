@@ -392,7 +392,9 @@ def run(args):
         if not os.environ.get(key):
             load_token_file(Path(__file__).resolve().parent)
             break
-    # Never delete extras until every required download has succeeded.
+    # Free space by deleting extras before starting downloads.
+    for rel in deletions:
+        files[rel].unlink()
     for model, _ in downloads:
         print(f'Downloading {model.path}...', flush=True)
         try:
@@ -408,9 +410,7 @@ def run(args):
                     detail += f': {message}'
             elif isinstance(getattr(e, 'code', None), int):
                 detail += f': HTTP {e.code}'
-            raise RuntimeError(f'download failed for {model.path}: {detail}; no extra files deleted') from None
-    for rel in deletions:
-        files[rel].unlink()
+            raise RuntimeError(f'download failed for {model.path}: {detail}') from None
     return 0
 
 
