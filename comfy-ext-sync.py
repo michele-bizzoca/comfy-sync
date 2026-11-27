@@ -203,8 +203,8 @@ def run(args):
             print(f'EXTRA {name}')
         print(f'{len(catalog)-len(changes)} valid, {len(changes)} invalid, {len(extras)} extra')
         return 0 if args.dry_run else int(bool(changes or extras))
-    installs = changes if args.command in ('sync', 'add') else []
-    deletes = extras if args.command in ('sync', 'remove') else []
+    installs = changes if args.command in ('update', 'add') else []
+    deletes = extras if args.command in ('update', 'remove') else []
     for e, reason in installs:
         print(f'INSTALL {e.name} ({reason})')
     for name in deletes:
@@ -224,7 +224,7 @@ def run(args):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('command', nargs='?', choices=('sync','add','remove','verify','check','record'), default='sync')
+    p.add_argument('command', nargs='?', choices=('update','add','remove','verify','check','record'), default='update')
     p.add_argument('--database', type=Path, help='XLSX manifest (default: extension-db.xlsx in unique ../comfy-db* directory relative to script)')
     p.add_argument('--directory', dest='extensions_dir', type=Path)
     p.add_argument('--python', type=Path, help='Python executable for extension requirements (default: ../comfy-ui/.venv/bin/python relative to script)')

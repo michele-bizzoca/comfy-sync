@@ -369,13 +369,13 @@ def run(args):
         return 1 if invalid or extras else 0
     downloads, deletions = [], []
     for rel, model in sorted(models.items()):
-        if args.command in ('sync', 'add'):
+        if args.command in ('update', 'add'):
             reason = problem(model, files.get(rel), False)
             if reason:
                 if model.url == '?':
                     raise ValueError(f'{rel}: {reason}; missing download link (Link = ?)')
                 downloads.append((model, reason))
-    if args.command in ('sync', 'remove'):
+    if args.command in ('update', 'remove'):
         deletions = sorted(set(files) - set(models))
     print(f'{args.command.upper()}{" (DRY RUN)" if args.dry_run else ""}: {root}', flush=True)
     for model, reason in downloads:
@@ -427,7 +427,7 @@ def resolve_defaults(args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, epilog="Credentials: CA_TOKEN and HF_TOKEN in the environment, or token-db.env in a unique ../comfy-db* directory relative to the script.")
-    parser.add_argument('command', nargs='?', choices=('sync', 'add', 'remove', 'verify', 'check', 'record'), default='sync', help='default: sync; verify checks model files; check validates the XLSX only')
+    parser.add_argument('command', nargs='?', choices=('update', 'add', 'remove', 'verify', 'check', 'record'), default='update', help='default: update; verify checks model files; check validates the XLSX only')
     parser.add_argument('--database', type=Path, help='XLSX manifest (default: model-db.xlsx in unique ../comfy-db* directory relative to script)')
     parser.add_argument('--directory', dest='models_dir', type=Path, help='dedicated models root (default: ../comfy-models relative to script)')
     parser.add_argument('--dry-run', action='store_true', help='print the plan without writes, downloads or hash checks; check --dry-run does nothing')

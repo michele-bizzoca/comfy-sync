@@ -12,7 +12,7 @@ Both `comfy-mod-sync.py` and `comfy-ext-sync.py` accept:
 - `--directory PATH`: managed directory; defaults to sibling comfy-models or comfy-extensions.
 - `--dry-run`: plan without changes.
 
-Commands: `sync` (default, reconcile), `add` (install missing or mismatched entries), `remove` (remove extras), `verify` (inspect managed files), `check` (validate catalog only), `record` (rebuild catalog from installed files). A dry-run check does nothing.
+Commands: `update` (default, reconcile), `add` (install missing or mismatched entries), `remove` (remove extras), `verify` (inspect managed files), `check` (validate catalog only), `record` (rebuild catalog from installed files). A dry-run check does nothing.
 
 Ext Sync additionally accepts `--python PATH` for installing requirements of installed or replaced extensions. Default: sibling comfy-ui/.venv/bin/python.
 
@@ -26,7 +26,7 @@ Record preserves existing cell values for matching paths except Enable (set to X
 
 Columns: Name, Link, Commit. Record uses directory name, Git origin and full HEAD SHA. Non-repositories and unreadable origins are skipped with a warning. Catalog validation requires HTTPS URLs without credentials and full commit SHAs.
 
-Both record commands replace the workbook atomically; formatting is not preserved. Empty recorded catalogs cannot be used for sync until populated. Dry-run record does not write or hash model files.
+Both record commands replace the workbook atomically; formatting is not preserved. Empty recorded catalogs cannot be used for update until populated. Dry-run record does not write or hash model files.
 
 ## Tests
 

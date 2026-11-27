@@ -102,13 +102,13 @@ class Tests(unittest.TestCase):
         row[6] = '?'
         self.write(row)
         with patch.object(m, 'download') as download:
-            code, out = self.call('sync')
+            code, out = self.call('update')
             self.assertEqual(code, 1)
             self.assertIn('checkpoints/model.bin', out)
             self.assertIn('missing download link', out)
             self.assertTrue(self.extra.exists())
             self.target.write_bytes(self.data)
-            self.assertEqual(self.call('sync')[0], 0)
+            self.assertEqual(self.call('update')[0], 0)
             download.assert_not_called()
 
     def test_unknown_link_disabled(self):
@@ -117,7 +117,7 @@ class Tests(unittest.TestCase):
         row[7] = ''
         self.write(row)
         with patch.object(m, 'download') as download:
-            self.assertEqual(self.call('sync')[0], 0)
+            self.assertEqual(self.call('update')[0], 0)
             download.assert_not_called()
 
     def test_case_sensitive_physical_paths(self):
@@ -133,7 +133,7 @@ class Tests(unittest.TestCase):
 
     def test_default_and_dry_run(self):
         code, out = self.call('--dry-run')
-        self.assertEqual(code, 0); self.assertIn('SYNC', out); self.assertIn('DOWNLOAD', out); self.assertIn('DELETE', out)
+        self.assertEqual(code, 0); self.assertIn('UPDATE', out); self.assertIn('DOWNLOAD', out); self.assertIn('DELETE', out)
         self.assertTrue(self.extra.exists()); self.assertFalse(self.target.exists())
     def test_add(self):
         with patch.object(m, 'download', self.fake_download): self.assertEqual(self.call('add')[0], 0)
@@ -267,7 +267,7 @@ class Tests(unittest.TestCase):
         (self.base / 'comfy-db-file').write_text('not a directory')
         (db / 'nested.xlsx').mkdir()
         (db / '~$model-db.xlsx').touch()
-        code, out = self.auto_call(script, 'sync', '--dry-run')
+        code, out = self.auto_call(script, 'update', '--dry-run')
         self.assertEqual(code, 0, out)
         self.assertIn('DOWNLOAD', out); self.assertIn('DELETE', out)
         self.assertTrue(self.extra.exists())
@@ -316,7 +316,7 @@ class Tests(unittest.TestCase):
     def test_missing_default_models_dir(self):
         script, _, _ = self.automatic_layout()
         self.root.rename(self.base / 'moved-models')
-        code, out = self.auto_call(script, 'sync')
+        code, out = self.auto_call(script, 'update')
         self.assertEqual(code, 1); self.assertIn('default models directory', out)
         self.assertFalse(self.root.exists())
 
@@ -342,17 +342,17 @@ class Tests(unittest.TestCase):
         (self.base / 'comfy-db-one').mkdir()
         (self.base / 'comfy-db-two').mkdir()
         with patch.dict(os.environ, {}, clear=True), patch.object(m, 'download') as download:
-            code, out = self.auto_call(script, 'sync')
+            code, out = self.auto_call(script, 'update')
             self.assertEqual(code, 1); self.assertIn('found 3', out)
             download.assert_not_called()
             self.assertTrue(self.extra.exists())
-            self.assertEqual(self.auto_call(script, 'sync', '--dry-run')[0], 1)
+            self.assertEqual(self.auto_call(script, 'update', '--dry-run')[0], 1)
 
     def test_malformed_token_file_does_not_leak_secret(self):
         script, folder, _ = self.automatic_layout()
         (folder / 'token-db.env').write_text('HF_TOKEN=secret-one\nHF_TOKEN=secret-two\n')
         with patch.dict(os.environ, {}, clear=True):
-            code, out = self.auto_call(script, 'sync')
+            code, out = self.auto_call(script, 'update')
             self.assertEqual(code, 1); self.assertIn('line 2', out)
             self.assertNotIn('secret-', out)
             self.assertTrue(self.extra.exists())
@@ -361,11 +361,11 @@ class Tests(unittest.TestCase):
         self.target.write_bytes(self.data)
         self.write(self.row[:-1] + [''])
         with patch.object(m, 'download') as download:
-            code, out = self.call('sync', '--dry-run')
+            code, out = self.call('update', '--dry-run')
             self.assertEqual(code, 0, out)
             self.assertIn('DELETE   checkpoints/model.bin', out)
             self.assertTrue(self.target.exists())
-            self.assertEqual(self.call('sync')[0], 0)
+            self.assertEqual(self.call('update')[0], 0)
             download.assert_not_called()
         self.assertFalse(self.target.exists()); self.assertFalse(self.extra.exists())
 
@@ -412,7 +412,7 @@ class Tests(unittest.TestCase):
         for value in ('true', 'false', '1', '0', 'XX', 'yes'):
             with self.subTest(value=value):
                 self.write(self.row[:-1] + [value])
-                code, out = self.call('sync')
+                code, out = self.call('update')
                 self.assertEqual(code, 1)
                 self.assertIn('enabled must be X', out)
                 self.assertTrue(self.extra.exists())
@@ -429,7 +429,7 @@ class Tests(unittest.TestCase):
         other = self.target.parent / 'other.bin'
         other.write_bytes(self.data)
         with patch.object(m, 'download', self.fake_download):
-            self.assertEqual(self.call('sync')[0], 0)
+            self.assertEqual(self.call('update')[0], 0)
         self.assertTrue(self.target.exists()); self.assertFalse(other.exists())
 
     def test_record_models(self):
@@ -546,7 +546,7 @@ class ExtensionTests(unittest.TestCase):
 
     def test_empty_manifest(self):
         self.write()
-        self.assertEqual(self.call('sync')[0], 1)
+        self.assertEqual(self.call('update')[0], 1)
 
     def test_bad_header(self):
         self.write(self.row, header=('Name', 'URL', 'Commit'))
@@ -554,7 +554,7 @@ class ExtensionTests(unittest.TestCase):
 
     def test_dry_run(self):
         with patch.object(self.ext, 'install') as install:
-            code, out = self.call('sync', '--dry-run')
+            code, out = self.call('update', '--dry-run')
             self.assertEqual(code, 0)
             self.assertIn('INSTALL Example', out)
             install.assert_not_called()
@@ -566,7 +566,7 @@ class ExtensionTests(unittest.TestCase):
 
     def test_symlink_refused(self):
         (self.root / 'Example').symlink_to(self.base)
-        self.assertEqual(self.call('sync')[0], 1)
+        self.assertEqual(self.call('update')[0], 1)
 
     def test_nonrepo_preserved(self):
         extra = self.root / 'unknown'
@@ -587,7 +587,7 @@ class ExtensionTests(unittest.TestCase):
         extra = self.root / 'unknown'
         extra.mkdir()
         with patch.object(self.ext, 'clean'), patch.object(self.ext, 'install', side_effect=RuntimeError('failed')):
-            self.assertEqual(self.call('sync')[0], 1)
+            self.assertEqual(self.call('update')[0], 1)
         self.assertTrue(extra.exists())
 
     def test_builtin_preserved(self):
