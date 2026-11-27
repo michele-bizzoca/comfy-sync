@@ -1,6 +1,39 @@
 # Comfy Sync
 
-A Linux deployment and inventory toolkit for ComfyUI. The database describes the desired installation; the managed directories contain its actual state. Setup provisions an installation, Update reconciles it, Record captures it, and Start launches it.
+**Your ComfyUI environment, reproducible by design.**
+
+A new machine should not mean starting from scratch. Keep your models, extensions, settings and runtime version pins in a database, then use Comfy Sync to rebuild your working environment, reconcile changes or capture a new snapshot.
+
+Move between machines, recover a working installation, or provision a fresh GPU instance without manually tracking every model and extension. Keep the installation separate from the inventory that describes it.
+
+## How it works
+
+Comfy Sync is a command-line deployment and inventory toolkit. Its primary target is Linux with an NVIDIA GPU.
+
+| Command | Purpose |
+| --- | --- |
+| `setup` | Provision ComfyUI and its runtime, then synchronize assets and settings. |
+| `update` | Reconcile assets and settings and report runtime version mismatches. |
+| `record` | Capture the current installation into the database. |
+| `start` | Launch ComfyUI with managed directories and forwarded launch options. |
+
+Five independent synchronizers provide finer control:
+
+| Synchronizer | Database | Responsibility |
+| --- | --- | --- |
+| `sync-models` | model-db.xlsx | Model inventory, download, integrity verification and reconciliation. |
+| `sync-extensions` | extension-db.xlsx | Git extension inventory and pinned checkouts. |
+| `sync-versions` | version-db.env | Validate, compare and record runtime versions. |
+| `sync-config` | config-db.json | Copy native ComfyUI settings in either direction. |
+| `sync-tokens` | token-db.env | Validate literal credential assignments locally. |
+
+The database describes the desired installation; the managed directories hold its actual state. Setup and Update work toward the desired state; Record captures the installed state. Start runs the installation without reconciling it.
+
+Models and extensions are stored outside the ComfyUI checkout. The model downloader supports parallel transfers, resumable ranged downloads where supported, SHA-256 verification and ZIP extraction. Extensions are pinned to exact Git commits. This is an inventory-based deployment tool, not a complete backup or a fully locked dependency environment.
+
+> **Important:** Update and remove can delete files or repositories absent from the desired inventory. Use dedicated managed directories, inspect dry-run plans and maintain backups.
+
+## Technical guide
 
 ## Directory layout
 
@@ -9,14 +42,21 @@ All paths below are relative to the parent of this repository, not the shell's w
 ```text
 workspace/
   comfy-sync/
-    setup.sh
-    update.sh
-    record.sh
-    start.sh
-    python/sync-models.py
-    python/sync-extensions.py
+    comfy-sync.sh
+    comfy-sync.bat
     requirements.txt
-    python/tests.py
+    README.md
+    python/
+      setup.py
+      update.py
+      record.py
+      start.py
+      sync-models.py
+      sync-extensions.py
+      sync-versions.py
+      sync-config.py
+      sync-tokens.py
+      tests.py
   comfy-db-main/
     model-db.xlsx
     extension-db.xlsx
@@ -35,23 +75,23 @@ workspace/
 
 Exactly one sibling directory matching `comfy-db*` is required for automatic discovery. Explicit database paths override catalog discovery in the Python managers, but model authentication may still require the sibling token database. Use dedicated managed directories: update and remove can delete unlisted entries. Do not store unrelated files there.
 
-## Quick start
+## Quick start and platform support
 
-Requirements: Linux (Setup targets Debian/Ubuntu with apt and dpkg), Bash, Git, NVIDIA driver, network access, Python with venv support, sufficient storage, and valid database files. The Python managers require openpyxl >=3.1,<4.
+Requirements: Linux (Setup targets Debian/Ubuntu with apt and dpkg), Bash, Git, NVIDIA driver, network access, Python with venv support, sufficient storage, and valid database files. The Python managers require openpyxl >=3.1,<4; model downloads also require httpx, installed by setup. The Bash dispatcher targets Linux and modern macOS with realpath. A Windows BAT dispatcher is supplied, but the Python implementation still assumes Unix paths and shell utilities in several places. Full setup on macOS or Windows is not supported or tested; the current version schema requires CUDA.
 
 ```sh
-bash setup.sh
-bash start.sh 8188
+./comfy-sync.sh setup
+./comfy-sync.sh start
 ```
 
 For an existing installation:
 
 ```sh
-bash update.sh
-bash record.sh
+./comfy-sync.sh update
+./comfy-sync.sh record
 ```
 
-Record changes the database, not the installation. Review its output and fill unknown model metadata before deploying elsewhere. No shell script automatically commits or pushes the database.
+Record changes the database, not the installation. Review its output and fill unknown model metadata before deploying elsewhere. No command automatically commits or pushes the database.
 
 ## Database reference
 
@@ -91,7 +131,7 @@ sha256sum example.safetensors
 
 A disabled model is outside the desired mirror: update/remove may delete its local file; verify reports it as extra. Add does not delete it. Link = ? is valid for catalog validation and for an already present file of the expected size. If an enabled file needs downloading (missing or wrong size), update/add fail before mutation, including dry-run. Verify checks SHA-256 independently of Link.
 
-Download progress is reported on stderr with transferred MiB, average speed, and a percentage bar when HTTP Content-Length is available. Interactive terminals refresh in place; redirected logs receive periodic lines. Downloads accept direct files regardless of remote filename, or ZIP archives whose non-directory members are filtered by uncompressed size and checked by SHA-256. The first matching member is selected. Size and SHA-256 must match before atomic replacement at the catalog Folder/Filename destination. HTTPS redirects are checked and authorization is stripped across origins. Extras are deleted before downloads begin, after preflight validation. A subsequent download failure does not restore deleted files. Existing same-size files are not hashed by update/add; use verify to detect corruption.
+Downloads default to eight concurrent models and four connections per model, using 16 MiB ranged segments. Partial data and metadata can be retained after network failures; cross-run range reuse requires a strong ETag. Servers without range support fall back to a sequential transfer. Completed payloads are validated before publication. Download progress is reported on stderr with transferred MiB, average speed, and a percentage bar when HTTP Content-Length is available. Interactive terminals refresh in place; redirected logs receive periodic lines. Downloads accept direct files regardless of remote filename, or ZIP archives whose non-directory members are filtered by uncompressed size and checked by SHA-256. The first matching member is selected. Size and SHA-256 must match before atomic replacement at the catalog Folder/Filename destination. HTTPS redirects are checked and authorization is stripped across origins. Extras are deleted before downloads begin, after preflight validation. A subsequent download failure does not restore deleted files. Existing same-size files are not hashed by update/add; use verify to detect corruption.
 
 Record scans recursively, including ordinary non-model files. Existing paths retain all catalog cell values except Enable, which becomes X; it does not refresh their size or hash. New paths get actual size and SHA-256, Name/Version/Link = ?, Enable = X. Missing paths are omitted. Dry-run lists changes without hashing new files or writing the workbook. Internal symlinks are refused.
 
@@ -163,18 +203,22 @@ OTHER_VARIABLE=example
 
 For each supported host, model downloads prefer a nonempty process environment variable, then the corresponding value in token-db.env. If neither supplies a nonempty token, the request is unauthenticated. Tokens are sent as HTTP Authorization: Bearer headers and stripped on cross-origin redirects. Other hosts receive no token.
 
-The model parser accepts arbitrary valid environment variable names, blank lines, full-line comments, KEY=VALUE assignments, optional export prefixes and matching outer quotes. Duplicate assignments use the last value. Values are read literally after trimming surrounding whitespace and removing matching outer quotes; shell expansion and command execution are not performed. Other variables are accepted but not used for model authentication. Start sources this file as shell code and exports its variables; keep it trusted and use simple shell-compatible assignments. Version files are also sourced by shell scripts. Keep actual secrets out of version control and catalog URLs. Record leaves tokens untouched.
+The model parser accepts arbitrary valid environment variable names, blank lines, full-line comments, KEY=VALUE assignments, optional export prefixes and matching outer quotes. Duplicate assignments use the last value. Values are read literally after trimming surrounding whitespace and removing matching outer quotes; shell expansion and command execution are not performed. Other variables are accepted but not used for model authentication. Start sources this file as shell code and exports its variables; keep it trusted and use simple shell-compatible assignments. Version files are also sourced through Bash. Keep actual secrets out of version control and catalog URLs. Record leaves tokens untouched.
 
-## Python command reference
+## Command reference
+
+Use `./comfy-sync.sh COMMAND [ARGUMENTS...]` (or `comfy-sync.bat COMMAND [ARGUMENTS...]` on Windows, subject to the platform limitations above). The dispatcher uses the managed interpreter, except that setup falls back to system Python if the venv is absent. Every synchronizer requires an explicit mode; there is no default mode. `--help` displays usage. Direct Python invocation is also available.
+
+### Models and extensions
 
 ```sh
-python python/sync-models.py [update|add|remove|verify|check|record] [options]
-python python/sync-extensions.py [update|add|remove|verify|check|record] [options]
+python python/sync-models.py {update|add|remove|verify|check|record} [options]
+python python/sync-extensions.py {update|add|remove|verify|check|record} [options]
 ```
 
 | Mode | Models | Extensions |
 | --- | --- | --- |
-| update (default) | Download missing/wrong-size enabled files; delete extras. | Install missing/mismatched repos; remove extras. |
+| update | Download missing/wrong-size enabled files; delete extras. | Install missing/mismatched repos; remove extras. |
 | add | Download only. | Install/replace only. |
 | remove | Delete extras only. | Remove extra clean repositories only. |
 | verify | Check presence, size, SHA-256 and extras. | Check origin, HEAD, local changes and extras. |
@@ -187,6 +231,8 @@ python python/sync-extensions.py [update|add|remove|verify|check|record] [option
 | --directory PATH | sibling comfy-models or comfy-extensions |
 | --dry-run | No writes, downloads, installs or deletions. Model verify skips hashes; extension verify still inspects Git. Check with dry-run is a no-op. |
 | --python PATH | Extensions only; sibling comfy-ui/.venv/bin/python for requirements installation. |
+| --parallel-downloads N | Models only; default 8 concurrent model downloads. |
+| --connections-per-download N | Models only; default 4 connections per model. |
 | --help | CLI usage |
 
 Explicit paths are interpreted relative to the invoking working directory if not absolute. Automatic paths are relative to the script location. Catalog must be outside the managed directory for filesystem operations. Root, home and current working directory are refused as managed roots. Use the venv interpreter for normal operation.
@@ -204,26 +250,49 @@ python python/sync-extensions.py verify --directory ../comfy-extensions
 
 Exit status: 0 success (including dry-run plans), 1 operational/validation failure or real verify discrepancies, 2 argparse usage errors.
 
-## Shell managers
+### Versions, configuration and tokens
 
-### setup.sh
+```sh
+./comfy-sync.sh sync-versions check
+./comfy-sync.sh sync-versions verify
+./comfy-sync.sh sync-versions record
+./comfy-sync.sh sync-config update
+./comfy-sync.sh sync-config record
+./comfy-sync.sh sync-tokens check
+```
+
+| Synchronizer / mode | Behavior |
+| --- | --- |
+| versions check | Validate the version file and print the three pins, one per line. |
+| versions verify | Compare the installed HEAD and runtime versions with the pins. |
+| versions record | Write the installed release and runtime versions to the database. |
+| config update | Copy the database settings into the default user profile. |
+| config record | Copy the installed settings into the database. |
+| tokens check | Validate literal assignments and report their count without printing secrets. |
+
+All three accept `--database PATH` (the file itself, not a directory) and `--dry-run`. Versions and tokens dry-runs are no-ops; configuration dry-run reports the copy direction without writing. Token check requires a readable UTF-8 .env file and does not authenticate against any remote service. It uses the same literal parser as model downloads; Start uses Bash sourcing instead. Configuration is copied as-is, not validated as JSON. Versions has no update mode: Setup owns runtime installation.
+
+## Lifecycle commands
+
+### setup
 
 Provisions the installation from the database. Checks driver compatibility, fetches/checks out ComfyUI release, moves initial models/custom_nodes/input/output directories out when applicable, creates managed directories and venv, checks existing Torch, torchvision and torchaudio before installing pinned CUDA Torch, then installs requirements plus additional runtime dependencies, writes Torch constraints and extension-path YAML inside comfy-ui, updates extensions, runs pip check and CUDA smoke test, updates models and copies settings. Stops on error. If all three Torch packages import successfully, Torch and CUDA versions match the database, and declared Torch dependencies of torchvision and torchaudio are satisfied, Setup skips both wheel-resolution dry-run and Torch installation. Otherwise it runs the original resolution and installation steps. The final CUDA smoke test and pip check still run. Setup can generally be rerun after completed stages, but recovery from an interrupted command is not guaranteed. Not a transactional installer; back up existing installations before running.
 
-### update.sh
+### update
 
 Uses the existing venv and Torch constraints. Updates extensions and models, copies settings from database, then checks ComfyUI/Python/Torch versions. Attempts subsequent stages even if an earlier stage fails; returns nonzero if any stage fails. Does not automatically upgrade core versions. A version mismatch is reported after reconciliation, not as a preflight guard.
 
-### record.sh
+### record
 
-Reverse inventory operation: checks local release tag and actual venv versions, stages existing model/extension catalogs, invokes both record modes, copies installed settings and writes version-db.env. Publishes all four staged files only after successful preparation. Each file replacement is atomic, but the four replacements are not one transaction. Token file is unchanged. No dry-run option on the shell wrapper; use individual Python record dry-runs to preview. Stop ComfyUI or avoid concurrent modifications during capture.
+Reverse inventory operation: checks local release tag and actual venv versions, stages existing model/extension catalogs, invokes both record modes, copies installed settings and writes version-db.env. Publishes all four staged files only after successful preparation. Each file replacement is atomic, but the four replacements are not one transaction. Token file is unchanged. No dry-run option on the lifecycle command; use individual Python record dry-runs to preview. Stop ComfyUI or avoid concurrent modifications during capture.
 
-### start.sh
+### start
 
-Launches ComfyUI with the venv interpreter, external model/input/output directories, generated extension-path YAML, manager enabled, automatic previews and DETAIL verbosity. Sources and exports token-db.env. Optional first positional argument sets port (default 8188). Binds to 0.0.0.0; use firewall/access controls rather than exposing the service directly to the internet.
+Launches ComfyUI with the venv interpreter, external model/input/output directories, generated extension-path YAML, manager enabled, automatic previews and DETAIL verbosity. Sources and exports token-db.env. All arguments after start are forwarded to ComfyUI. The dispatcher supplies --preview-method auto, --listen 0.0.0.0 and --port 8188 unless the corresponding option is explicitly supplied (including --option=value syntax). By default it binds to 0.0.0.0; use firewall/access controls rather than exposing the service directly to the internet.
 
 ```sh
-bash start.sh 8190
+./comfy-sync.sh start --port 8190
+./comfy-sync.sh start --listen 127.0.0.1 --preview-method none
 ```
 
 ## Maintenance and safety
@@ -237,12 +306,13 @@ bash start.sh 8190
 - Avoid concurrent manager runs or edits to managed files; there is no global locking or rollback.
 - The database is an inventory, not a full backup or complete dependency lockfile.
 
-## Tests
+## Tests and verification status
 
 ```sh
 python -m pip install -r requirements.txt
-python -m unittest -v test
-bash -n setup.sh update.sh record.sh start.sh
+python -m pip install httpx
+python python/tests.py
+bash -n comfy-sync.sh
 ```
 
 Validate real catalogs without modifying them:
@@ -252,4 +322,4 @@ python python/sync-models.py check --database ../comfy-db-main/model-db.xlsx
 python python/sync-extensions.py check --database ../comfy-db-main/extension-db.xlsx
 ```
 
-The unit suite covers catalog validation, discovery, dry-run, record, download handling, extension reconciliation and requirements interpreter selection. A real GPU deployment and shell integration tests are separate from the Python unit suite.
+The unit suite covers catalog validation, discovery, dry-run, record, download handling, extension reconciliation and requirements interpreter selection. A real GPU deployment and shell integration tests are separate from the Python unit suite. The latest dispatcher and extracted synchronizers have not yet been integration-tested; the Windows dispatcher is untested on Windows.
