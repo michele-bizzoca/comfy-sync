@@ -539,6 +539,7 @@ def run(args):
     if args.command in ('update', 'remove'):
         keep = {p for model, _ in downloads for p in partial_paths(model.path)}
         deletions = sorted(set(files) - set(models) - keep)
+    downloads.sort(key=lambda item: (item[0].size, item[0].path))
     print(f'{args.command.upper()}{" (DRY RUN)" if args.dry_run else ""}: {root}', flush=True)
     for model, reason in downloads:
         print(f'DOWNLOAD {model.path} ({reason})', flush=True)
