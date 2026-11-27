@@ -320,14 +320,15 @@ def run(args):
     return 0
 
 
-def discover_xlsx(script_dir):
-    databases = sorted(p for p in script_dir.parent.glob('models-db*') if p.is_dir())
+def discover_db(script_dir):
+    databases = sorted(p for p in script_dir.parent.glob('comfy-db*') if p.is_dir())
     if len(databases) != 1:
-        raise ValueError(f'expected exactly one models-db* directory in {script_dir.parent}; found {len(databases)}; specify --xlsx')
-    candidates = sorted(p for p in databases[0].glob('*.xlsx') if p.is_file() and not p.name.startswith('~$'))
-    if len(candidates) != 1:
-        raise ValueError(f'expected exactly one XLSX in {databases[0]}; found {len(candidates)}; specify --xlsx')
-    return candidates[0]
+        raise ValueError(f'expected exactly one comfy-db* directory; found {len(databases)}')
+    return databases[0]
+
+
+def discover_xlsx(script_dir):
+    return discover_db(script_dir) / 'model-db.xlsx'
 
 
 def resolve_defaults(args):
@@ -335,7 +336,7 @@ def resolve_defaults(args):
     if args.xlsx is None:
         args.xlsx = discover_xlsx(script_dir)
     if args.command != 'check' and args.models_dir is None:
-        args.models_dir = script_dir.parent / 'models'
+        args.models_dir = script_dir.parent / 'comfy-models'
         if not args.models_dir.is_dir():
             raise ValueError(f'default models directory does not exist or is not a directory: {args.models_dir}; specify --models-dir')
     return args
@@ -344,8 +345,8 @@ def resolve_defaults(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, epilog="Credentials: CA_TOKEN and HF_TOKEN in the environment, or tokens.env in a unique ../token-db* directory relative to the script.")
     parser.add_argument('command', nargs='?', choices=('sync', 'add', 'remove', 'verify', 'check'), default='sync', help='default: sync; verify checks model files; check validates the XLSX only')
-    parser.add_argument('--xlsx', type=Path, help='XLSX manifest (default: unique *.xlsx in unique ../models-db* directory relative to script)')
-    parser.add_argument('--models-dir', '--models-directory', type=Path, help='dedicated models root (default: ../models relative to script)')
+    parser.add_argument('--xlsx', type=Path, help='XLSX manifest (default: model-db.xlsx in unique ../comfy-db* directory relative to script)')
+    parser.add_argument('--models-dir', '--models-directory', type=Path, help='dedicated models root (default: ../comfy-models relative to script)')
     parser.add_argument('--dry-run', action='store_true', help='print the plan without writes, downloads or hash checks; check --dry-run does nothing')
     args = parser.parse_args(argv)
     if args.command == 'check' and args.dry_run:
