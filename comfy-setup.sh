@@ -27,3 +27,9 @@ sudo apt update && sudo apt install "python$python_ver" "python$python_ver-venv"
     scikit-image
 .venv/bin/python -m pip install torch torchvision torchaudio \
     --index-url "https://download.pytorch.org/whl/cu${cuda_ver//./}"
+
+for extension in "$comfy_dir"/custom_nodes/*/; do
+    if [[ -f "$extension/requirements.txt" ]]; then
+        .venv/bin/python -m pip install -r "$extension/requirements.txt"
+    fi
+done
