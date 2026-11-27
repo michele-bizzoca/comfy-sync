@@ -356,7 +356,7 @@ def transfer(model, temp, state_path, scratch, connections, progress=None):
         save({'identity': identity, 'complete': True})
 
 
-def download(model, root, connections=8, progress=None):
+def download(model, root, connections=4, progress=None):
     target = root.joinpath(*model.path.parts)
     target.parent.mkdir(parents=True, exist_ok=True)
     temp, state_path, scratch = (root.joinpath(*p.parts) for p in partial_paths(model.path))
@@ -672,8 +672,8 @@ def main(argv=None):
     parser.add_argument('--database', type=Path, help='XLSX manifest (default: model-db.xlsx in unique ../comfy-db* directory relative to script)')
     parser.add_argument('--directory', dest='models_dir', type=Path, help='dedicated models root (default: ../comfy-models relative to script)')
     parser.add_argument('--dry-run', action='store_true', help='print the plan without writes, downloads or hash checks; check --dry-run does nothing')
-    parser.add_argument('--parallel-downloads', type=int, default=4)
-    parser.add_argument('--connections-per-download', type=int, default=8)
+    parser.add_argument('--parallel-downloads', type=int, default=8)
+    parser.add_argument('--connections-per-download', type=int, default=4)
     args = parser.parse_args(argv)
     if min(args.parallel_downloads, args.connections_per_download) < 1:
         parser.error('download concurrency must be positive')
