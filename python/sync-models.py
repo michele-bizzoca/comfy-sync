@@ -246,7 +246,7 @@ def transfer(model, temp, state_path, scratch, connections, progress=None):
         else:
             progress(model.path, line, fraction, speed)
 
-    with httpx.Client(timeout=60, follow_redirects=False, trust_env=False) as client:
+    with httpx.Client(timeout=httpx.Timeout(connect=10.0, read=15.0, write=10.0, pool=10.0), follow_redirects=False, trust_env=False) as client:
         try:
             state = json.loads(state_path.read_text())
         except (OSError, ValueError):
