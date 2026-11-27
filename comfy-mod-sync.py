@@ -253,9 +253,9 @@ def download(model, root):
 def run(args):
     if args.command == 'check' and args.dry_run:
         return 0
-    if args.xlsx.suffix.lower() != '.xlsx':
+    if args.database.suffix.lower() != '.xlsx':
         raise ValueError('manifest must have the .xlsx extension')
-    manifest = args.xlsx.resolve(strict=True)
+    manifest = args.database.resolve(strict=True)
     if args.command == 'check':
         catalog = load_manifest(manifest)
         enabled = sum(model.enabled for model in catalog.values())
@@ -344,14 +344,14 @@ def discover_db(script_dir):
     return databases[0]
 
 
-def discover_xlsx(script_dir):
+def discover_database(script_dir):
     return discover_db(script_dir) / 'model-db.xlsx'
 
 
 def resolve_defaults(args):
     script_dir = Path(__file__).resolve().parent
-    if args.xlsx is None:
-        args.xlsx = discover_xlsx(script_dir)
+    if args.database is None:
+        args.database = discover_database(script_dir)
     if args.command != 'check' and args.models_dir is None:
         args.models_dir = script_dir.parent / 'comfy-models'
         if not args.models_dir.is_dir():
@@ -362,7 +362,7 @@ def resolve_defaults(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, epilog="Credentials: CA_TOKEN and HF_TOKEN in the environment, or token-db.env in a unique ../comfy-db* directory relative to the script.")
     parser.add_argument('command', nargs='?', choices=('sync', 'add', 'remove', 'verify', 'check'), default='sync', help='default: sync; verify checks model files; check validates the XLSX only')
-    parser.add_argument('--xlsx', type=Path, help='XLSX manifest (default: model-db.xlsx in unique ../comfy-db* directory relative to script)')
+    parser.add_argument('--database', type=Path, help='XLSX manifest (default: model-db.xlsx in unique ../comfy-db* directory relative to script)')
     parser.add_argument('--directory', dest='models_dir', type=Path, help='dedicated models root (default: ../comfy-models relative to script)')
     parser.add_argument('--dry-run', action='store_true', help='print the plan without writes, downloads or hash checks; check --dry-run does nothing')
     args = parser.parse_args(argv)

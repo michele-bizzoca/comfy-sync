@@ -53,7 +53,7 @@ class Tests(unittest.TestCase):
     def call(self, *args):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            status = m.main([*args, '--xlsx', str(self.manifest), '--directory', str(self.root)])
+            status = m.main([*args, '--database', str(self.manifest), '--directory', str(self.root)])
         return status, out.getvalue()
     def fake_download(self, model, root):
         root.joinpath(*model.path.parts).write_bytes(self.data)
@@ -271,7 +271,7 @@ class Tests(unittest.TestCase):
     def test_explicit_xlsx_overrides_discovery(self):
         script, db, _ = self.automatic_layout()
         (db / 'other.xlsx').write_bytes(self.manifest.read_bytes())
-        code, out = self.auto_call(script, '--xlsx', str(self.manifest), '--dry-run')
+        code, out = self.auto_call(script, '--database', str(self.manifest), '--dry-run')
         self.assertEqual(code, 0, out)
 
     def test_explicit_models_dir_overrides_default(self):
@@ -405,7 +405,7 @@ class Tests(unittest.TestCase):
         with patch.object(m, 'scan') as scan, patch.object(m, 'download') as download, patch.object(m, 'auth_token') as token:
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                code = m.main(['check', '--xlsx', str(self.manifest)])
+                code = m.main(['check', '--database', str(self.manifest)])
             self.assertEqual(code, 0)
             self.assertIn('2 entries, 1 enabled, 1 disabled', out.getvalue())
             scan.assert_not_called(); download.assert_not_called(); token.assert_not_called()
@@ -423,7 +423,7 @@ class Tests(unittest.TestCase):
         with patch.object(m, 'resolve_defaults') as defaults, patch.object(m, 'load_manifest') as load, patch.object(m, 'scan') as scan:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
                 self.assertEqual(m.main(['check', '--dry-run']), 0)
-                self.assertEqual(m.main(['check', '--dry-run', '--xlsx', '/missing.xlsx']), 0)
+                self.assertEqual(m.main(['check', '--dry-run', '--database', '/missing.xlsx']), 0)
             defaults.assert_not_called(); load.assert_not_called(); scan.assert_not_called()
         self.assertEqual(out.getvalue(), '')
 
@@ -451,7 +451,7 @@ class ExtensionTests(unittest.TestCase):
     def call(self, *args):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            code = self.ext.main([*args, '--xlsx', str(self.xlsx), '--directory', str(self.root)])
+            code = self.ext.main([*args, '--database', str(self.xlsx), '--directory', str(self.root)])
         return code, out.getvalue()
 
     def test_check(self):

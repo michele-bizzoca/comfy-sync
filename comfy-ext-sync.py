@@ -121,7 +121,7 @@ def install_requirements(ext, root):
                        cwd=requirements.parent, check=True)
 
 def run(args):
-    catalog = load_manifest(args.xlsx.resolve(strict=True))
+    catalog = load_manifest(args.database.resolve(strict=True))
     if args.command == 'check':
         print(f'XLSX valid: {len(catalog)} extensions')
         return 0
@@ -131,7 +131,7 @@ def run(args):
     root = root.resolve(strict=True)
     if not root.is_dir() or root in (Path(root.anchor), Path.home().resolve(), Path.cwd().resolve()):
         raise ValueError('unsafe extensions root')
-    if args.xlsx.resolve().is_relative_to(root):
+    if args.database.resolve().is_relative_to(root):
         raise ValueError('manifest must be outside extensions root')
     entries = {}
     for p in root.iterdir():
@@ -174,7 +174,7 @@ def run(args):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('command', nargs='?', choices=('sync','add','remove','verify','check'), default='sync')
-    p.add_argument('--xlsx', type=Path)
+    p.add_argument('--database', type=Path, help='XLSX manifest (default: extension-db.xlsx in unique ../comfy-db* directory relative to script)')
     p.add_argument('--directory', dest='extensions_dir', type=Path)
     p.add_argument('--dry-run', action='store_true')
     a = p.parse_args(argv)
@@ -182,12 +182,12 @@ def main(argv=None):
         return 0
     try:
         base = Path(__file__).resolve().parent.parent
-        if a.xlsx is None:
+        if a.database is None:
             db = sorted(x for x in base.glob('comfy-db*') if x.is_dir())
             if len(db) != 1:
                 raise ValueError(f'expected exactly one comfy-db* directory; found {len(db)}')
-            a.xlsx = db[0] / 'extension-db.xlsx'
-        if a.xlsx.suffix.lower() != '.xlsx':
+            a.database = db[0] / 'extension-db.xlsx'
+        if a.database.suffix.lower() != '.xlsx':
             raise ValueError('manifest must have .xlsx extension')
         if a.extensions_dir is None:
             a.extensions_dir = base / 'comfy-extensions'
