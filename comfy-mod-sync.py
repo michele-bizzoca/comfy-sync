@@ -421,7 +421,7 @@ def resolve_defaults(args):
     if args.command != 'check' and args.models_dir is None:
         args.models_dir = script_dir.parent / 'comfy-models'
         if not args.models_dir.is_dir():
-            raise ValueError(f'default models directory does not exist or is not a directory: {args.models_dir}; specify --models-dir')
+            raise ValueError(f'default models directory does not exist or is not a directory: {args.models_dir}; specify --directory')
     return args
 
 
