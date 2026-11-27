@@ -125,9 +125,9 @@ class ModelTests(WorkspaceTestCase):
                                     "content-range": "bytes 0-0/4",
                                     "etag": '"stable"',
                                 },
-                                content=b"g",
+                                stream=httpx.ByteStream(b"g"),
                             )
-                        return httpx.Response(200, content=self.data)
+                        return httpx.Response(200, stream=httpx.ByteStream(self.data))
                     if byte_range == "bytes=0-3":
                         self.assertEqual(request.headers.get("if-range"), '"stable"')
                         return httpx.Response(
@@ -136,10 +136,10 @@ class ModelTests(WorkspaceTestCase):
                                 "content-range": "bytes 0-3/4",
                                 "etag": '"stable"',
                             },
-                            content=self.data,
+                            stream=httpx.ByteStream(self.data),
                         )
                     self.assertIsNone(byte_range)
-                    return httpx.Response(200, content=self.data)
+                    return httpx.Response(200, stream=httpx.ByteStream(self.data))
 
                 with self.mock_http(serve):
                     models.download(model, self.root, connections=2)
@@ -177,7 +177,7 @@ class ModelTests(WorkspaceTestCase):
             return httpx.Response(
                 206,
                 headers={"content-range": "bytes 0-0/4", "etag": '"stable"'},
-                content=b"g",
+                stream=httpx.ByteStream(b"g"),
             )
 
         with self.mock_http(serve):
@@ -200,14 +200,14 @@ class ModelTests(WorkspaceTestCase):
                 return httpx.Response(
                     206,
                     headers={"content-range": "bytes 0-0/4", "etag": '"stable"'},
-                    content=b"g",
+                    stream=httpx.ByteStream(b"g"),
                 )
             if ranges.count("bytes=0-3") == 1:
                 return httpx.Response(503)
             return httpx.Response(
                 206,
                 headers={"content-range": "bytes 0-3/4", "etag": '"stable"'},
-                content=self.data,
+                stream=httpx.ByteStream(self.data),
             )
 
         with self.mock_http(serve), patch.object(models.time, "sleep") as sleep:
