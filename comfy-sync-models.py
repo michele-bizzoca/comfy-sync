@@ -243,8 +243,10 @@ def download(model, root):
                 candidate = extracted
         if candidate == temp and remote_filename != target.name:
             raise ValueError('direct download filename does not match manifest')
-        if candidate.stat().st_size != model.size or sha256(candidate) != model.sha256:
-            raise ValueError('download failed size or SHA-256 verification')
+        if candidate.stat().st_size != model.size:
+            raise ValueError(f'download size mismatch (expected {model.size} bytes, got {candidate.stat().st_size} bytes)')
+        if sha256(candidate) != model.sha256:
+            raise ValueError('download SHA-256 mismatch')
         os.replace(candidate, target)
     finally:
         for item in (temp, extracted):
@@ -397,7 +399,16 @@ def run(args):
             download(model, root)
         except Exception as e:
             # Avoid printing request URLs (which could contain credentials).
-            raise RuntimeError(f'download failed for {model.path}: {type(e).__name__}: {getattr(e, "code", "")}; no extra files deleted') from None
+            detail = type(e).__name__
+            if isinstance(e, ValueError):
+                message = str(e)
+                if message in ["unsafe download redirect","ZIP must contain exactly one matching model filename","ZIP model size mismatch","extracted model larger than expected","direct download filename does not match manifest","download SHA-256 mismatch"]:
+                    detail += f': {message}'
+                elif message.startswith('download size mismatch (expected ') and message.endswith(' bytes)') and message.removeprefix('download size mismatch (expected ').removesuffix(' bytes)').replace(' bytes, got ', '').isdigit():
+                    detail += f': {message}'
+            elif isinstance(getattr(e, 'code', None), int):
+                detail += f': HTTP {e.code}'
+            raise RuntimeError(f'download failed for {model.path}: {detail}; no extra files deleted') from None
     for rel in deletions:
         files[rel].unlink()
     return 0
