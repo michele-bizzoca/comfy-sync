@@ -36,3 +36,7 @@ Run `python -m unittest -v test`. To validate real catalogs without modifying th
 python comfy-mod-sync.py check --database ../comfy-db-main/model-db.xlsx
 python comfy-ext-sync.py check --database ../comfy-db-main/extension-db.xlsx
 ```
+
+## Record installation
+
+Run `./comfy-record.sh` to record installed extensions and models, copy ComfyUI settings back to config-db.json, and write installed ComfyUI, Python and Torch versions to version-db.env. ComfyUI HEAD must have exactly one local vX.Y.Z release tag; Python and CUDA Torch versions must match the setup format. All four outputs are staged before replacement; replacement is atomic per file, not across the whole set. Tokens are untouched.
