@@ -542,11 +542,11 @@ def run(args):
         deletions = sorted(set(files) - set(models) - keep)
     downloads.sort(key=lambda item: (item[0].size, item[0].path))
     print(f'{args.command.upper()}{" (DRY RUN)" if args.dry_run else ""}: {root}', flush=True)
+    print(f'{matches} matches, {len(downloads)} downloads, {len(deletions)} deletions', flush=True)
     for model, reason in downloads:
         print(f'DOWNLOAD {model.path} ({reason})', flush=True)
     for rel in deletions:
         print(f'DELETE   {rel}', flush=True)
-    print(f'{matches} matches, {len(downloads)} downloads, {len(deletions)} deletions', flush=True)
     if args.dry_run:
         return 0
     if downloads:
