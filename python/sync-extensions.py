@@ -383,9 +383,8 @@ def main(argv=None):
     """Parse command-line options and translate expected failures into exit status 1."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        'command', nargs='?',
+        'command',
         choices=('update', 'add', 'remove', 'verify', 'check', 'record'),
-        default='update',
     )
     parser.add_argument(
         '--database', type=Path,

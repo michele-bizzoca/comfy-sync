@@ -39,7 +39,7 @@ def read_tokens(path):
 def main(argv=None):
     """Check literal assignments without contacting remote services."""
     cli = argparse.ArgumentParser(description=__doc__)
-    cli.add_argument("command", nargs="?", choices=("check",), default="check")
+    cli.add_argument("command", choices=("check",))
     cli.add_argument("--database", type=Path)
     cli.add_argument("--dry-run", action="store_true")
     args = cli.parse_args(argv)

@@ -92,7 +92,7 @@ def installed_versions() -> tuple[str, str, str]:
 def main(argv=None):
     """Expose version operations without automatically upgrading the runtime."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", nargs="?", choices=("check", "verify", "record"), default="verify")
+    parser.add_argument("command", choices=("check", "verify", "record"))
     parser.add_argument("--database", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)

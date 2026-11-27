@@ -21,7 +21,7 @@ def database() -> Path:
 def main(argv=None):
     """Select the copy direction; record never changes the installed settings."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", nargs="?", choices=("update", "record"), default="update")
+    parser.add_argument("command", choices=("update", "record"))
     parser.add_argument("--database", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)

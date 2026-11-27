@@ -818,10 +818,9 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
-        'command', nargs='?',
+        'command',
         choices=('update', 'add', 'remove', 'verify', 'check', 'record'),
-        default='update',
-        help='default: update; verify checks model files; check validates the XLSX only',
+        help='verify checks model files; check validates the XLSX only',
     )
     parser.add_argument(
         '--database', type=Path,
