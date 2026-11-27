@@ -217,6 +217,78 @@ def stream(client, url, headers):
     raise DownloadError('too many redirects')
 
 
+def download_segment(client, model, temp, headers, etag, total, block, index):
+    """Retry one exact byte range and flush its bytes before acknowledging it."""
+    import httpx
+
+    lo, hi = index * block, min(total, (index + 1) * block) - 1
+    request_headers = dict(headers, Range=f'bytes={lo}-{hi}')
+    if etag:
+        request_headers['If-Range'] = etag
+    for attempt in range(6):
+        try:
+            with closing(stream(client, model.url, request_headers)) as response:
+                if response.status_code != 206 or response.headers.get('content-range') != f'bytes {lo}-{hi}/{total}':
+                    actual = response.headers.get('content-range', '')
+                    safe_actual = actual if re.fullmatch(r'bytes (?:[0-9]+-[0-9]+|\*)/(?:[0-9]+|\*)', actual) else 'missing or invalid'
+                    raise DownloadError(f'range response mismatch: expected bytes {lo}-{hi}/{total}; HTTP {response.status_code}; received {safe_actual}')
+                if etag and response.headers.get('etag') not in (None, etag):
+                    raise DownloadError('remote entity changed')
+                offset = lo
+                with temp.open('r+b', buffering=0) as f:
+                    f.seek(lo)
+                    for data in response.iter_raw(CHUNK):
+                        if offset + len(data) > hi + 1:
+                            raise DownloadError('range response too large')
+                        f.write(data)
+                        offset += len(data)
+                    if offset != hi + 1:
+                        raise DownloadError('incomplete range')
+                    os.fsync(f.fileno())
+            return index, hi - lo + 1
+        except (httpx.HTTPError, OSError, DownloadError):
+            if attempt == 5:
+                raise
+            time.sleep(min(2 ** attempt, 16))
+
+
+def save_download_state(scratch, state_path, state):
+    """Atomically persist resumable transfer metadata."""
+    with scratch.open('w') as handle:
+        json.dump(state, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(scratch, state_path)
+
+
+def load_download_state(state_path, identity, temp):
+    try:
+        state = json.loads(state_path.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(state, dict) or state.get('identity') != identity or not temp.is_file():
+        return {}
+    return state
+
+
+def probe_range_support(client, url, headers):
+    """Detect HTTP range support and ignore weak ETags for resumption."""
+    with closing(stream(client, url, dict(headers, Range='bytes=0-0'))) as response:
+        match = re.fullmatch(
+            r'bytes 0-0/([0-9]+)', response.headers.get('content-range', '')
+        )
+        etag = response.headers.get('etag')
+        if etag and etag.startswith('W/'):
+            etag = None
+        if response.status_code == 206 and match and int(match[1]) > 0:
+            total = int(match[1])
+        elif response.status_code in (200, 416):
+            total = None
+        else:
+            raise DownloadError(f'HTTP {response.status_code}')
+    return total, etag
+
+
 def transfer(model, temp, state_path, scratch, connections, progress=None):
     import httpx
     headers = {'User-Agent': 'comfy-model-sync/0.1', 'Accept-Encoding': 'identity'}
@@ -227,13 +299,6 @@ def transfer(model, temp, state_path, scratch, connections, progress=None):
                 'url_hash': hashlib.sha256(model.url.encode()).hexdigest()}
     started = time.monotonic()
     received = 0
-
-    def save(state):
-        with scratch.open('w') as f:
-            json.dump(state, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(scratch, state_path)
 
     def report(done, total):
         speed = received / max(time.monotonic() - started, .001) / 1048576
@@ -247,28 +312,13 @@ def transfer(model, temp, state_path, scratch, connections, progress=None):
             progress(model.path, line, fraction, speed)
 
     with httpx.Client(timeout=httpx.Timeout(connect=10.0, read=15.0, write=10.0, pool=10.0), follow_redirects=False, trust_env=False) as client:
-        try:
-            state = json.loads(state_path.read_text())
-        except (OSError, ValueError):
-            state = {}
-        if not isinstance(state, dict) or state.get('identity') != identity or not temp.is_file():
-            state = {}
+        state = load_download_state(state_path, identity, temp)
         if state.get('complete'):
             return
-        with closing(stream(client, model.url, dict(headers, Range='bytes=0-0'))) as probe:
-            match = re.fullmatch(r'bytes 0-0/([0-9]+)', probe.headers.get('content-range', ''))
-            etag = probe.headers.get('etag')
-            if etag and etag.startswith('W/'):
-                etag = None
-            if probe.status_code == 206 and match and int(match[1]) > 0:
-                total = int(match[1])
-            elif probe.status_code in (200, 416):
-                total = None
-            else:
-                raise DownloadError(f'HTTP {probe.status_code}')
+        total, etag = probe_range_support(client, model.url, headers)
         if total is None:
             # No ranges: restart this transfer, never append an unverified response.
-            save({'identity': identity})
+            save_download_state(scratch, state_path, {'identity': identity})
             with closing(stream(client, model.url, headers)) as response:
                 if response.status_code != 200:
                     raise DownloadError(f'HTTP {response.status_code}')
@@ -291,51 +341,31 @@ def transfer(model, temp, state_path, scratch, connections, progress=None):
             # Fixed chunks allow resumption even when concurrency changes.
             block = 16 * 1024 * 1024
             count = (total + block - 1) // block
-            if not (etag and state.get('etag') == etag and state.get('total') == total
-                    and temp.stat().st_size == total if state and temp.exists() else False):
+            resumable = (
+                bool(state) and temp.exists() and bool(etag)
+                and state.get('etag') == etag
+                and state.get('total') == total
+                and temp.stat().st_size == total
+            )
+            if not resumable:
                 state = {}
             completed = {i for i in state.get('completed', []) if isinstance(i, int) and 0 <= i < count}
             with temp.open('r+b' if state else 'w+b') as f:
                 f.truncate(total)
             state = {'identity': identity, 'etag': etag, 'total': total, 'completed': sorted(completed)}
-            save(state)
-
-            def segment(i):
-                lo, hi = i * block, min(total, (i + 1) * block) - 1
-                request_headers = dict(headers, Range=f'bytes={lo}-{hi}')
-                if etag:
-                    request_headers['If-Range'] = etag
-                for attempt in range(6):
-                    try:
-                        with closing(stream(client, model.url, request_headers)) as response:
-                            if response.status_code != 206 or response.headers.get('content-range') != f'bytes {lo}-{hi}/{total}':
-                                actual = response.headers.get('content-range', '')
-                                safe_actual = actual if re.fullmatch(r'bytes (?:[0-9]+-[0-9]+|\*)/(?:[0-9]+|\*)', actual) else 'missing or invalid'
-                                raise DownloadError(f'range response mismatch: expected bytes {lo}-{hi}/{total}; HTTP {response.status_code}; received {safe_actual}')
-                            if etag and response.headers.get('etag') not in (None, etag):
-                                raise DownloadError('remote entity changed')
-                            offset = lo
-                            with temp.open('r+b', buffering=0) as f:
-                                f.seek(lo)
-                                for data in response.iter_raw(CHUNK):
-                                    if offset + len(data) > hi + 1:
-                                        raise DownloadError('range response too large')
-                                    f.write(data)
-                                    offset += len(data)
-                                if offset != hi + 1:
-                                    raise DownloadError('incomplete range')
-                                os.fsync(f.fileno())
-                        return i, hi - lo + 1
-                    except (httpx.HTTPError, OSError, DownloadError):
-                        if attempt == 5:
-                            raise
-                        time.sleep(min(2 ** attempt, 16))
+            save_download_state(scratch, state_path, state)
 
             failures = []
             done = sum(min(block, total - i * block) for i in completed)
             last = started
             with ThreadPoolExecutor(max_workers=connections) as pool:
-                futures = [pool.submit(segment, i) for i in range(count) if i not in completed]
+                futures = [
+                    pool.submit(
+                        download_segment, client, model, temp, headers,
+                        etag, total, block, index,
+                    )
+                    for index in range(count) if index not in completed
+                ]
                 for future in as_completed(futures):
                     try:
                         i, size = future.result()
@@ -353,7 +383,7 @@ def transfer(model, temp, state_path, scratch, connections, progress=None):
             report(done, total)
             if failures:
                 raise failures[0]
-        save({'identity': identity, 'complete': True})
+        save_download_state(scratch, state_path, {'identity': identity, 'complete': True})
 
 
 def download(model, root, connections=4, progress=None):
@@ -686,7 +716,7 @@ def run(args):
     if args.dry_run:
         return 0
     preflight_downloads(plan.downloads)
-    # Free space by deleting extras before starting plan.downloads.
+    # Free space by deleting extras before starting downloads.
     for rel in plan.deletions:
         files[rel].unlink()
     return run_downloads(args, root, plan)
