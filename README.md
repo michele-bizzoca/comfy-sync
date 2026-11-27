@@ -120,7 +120,7 @@ git -C ../comfy-extensions/ComfyUI-Example rev-parse HEAD
 
 There is no Enable column. All rows are desired extensions. The manager compares origin (ignoring trailing slash and .git), HEAD and local changes. It clones/fetches the pinned commit and checks out detached HEAD. Replacement/removal refuses non-standalone repositories and repositories with tracked, untracked or ignored changes. Symlinks are refused. Built-in entries __pycache__, example_node.py.example and websocket_image_save.py are skipped during filesystem reconciliation; do not list them in the catalog.
 
-Requirements are installed only for extensions installed or replaced in that invocation, using the selected Python executable. An installation or pip failure can leave earlier changes applied; the operation is not a global transaction.
+Requirements are installed only for extensions installed or replaced in that invocation, using the selected Python executable. After preflight cleanliness checks, extra repositories are removed before any cloning or requirements installation. A later installation or pip failure does not restore deleted extras. Replacement of an existing desired repository still stages its new checkout before swapping it in. The operation is not a global transaction.
 
 Record reads each immediate standalone Git repository's directory name, origin and HEAD. Non-repositories and unreadable origins are skipped with warnings. It does not capture uncommitted changes, local files or dependency versions. Unsupported origins (such as SSH URLs) fail catalog validation before replacement. Missing extensions are omitted.
 
