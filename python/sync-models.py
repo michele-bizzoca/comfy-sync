@@ -24,11 +24,14 @@ from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile, ZipFile, is_zipfile
 
 FIELDS = ('Name', 'Version', 'Folder', 'Filename', 'Size', 'Hash', 'Link', 'Enable')
+# Stream in 1 MiB buffers; schedule independently resumable 16 MiB ranges.
 CHUNK = 1024 * 1024
 RANGE_BLOCK = 16 * CHUNK
 
 @dataclass(frozen=True)
 class Model:
+    """Catalog metadata and integrity expectations for one relative file path."""
+
     name: str
     version: str
     path: PurePosixPath
@@ -39,6 +42,7 @@ class Model:
 
 
 def relative_path(directory, filename):
+    """Construct a safe portable catalog path from its folder and filename."""
     # Only portable, relative POSIX paths. No implicit normalization.
     parts = directory.split('/') if directory else []
     if '/' in filename or not filename:
@@ -50,6 +54,7 @@ def relative_path(directory, filename):
 
 
 def load_manifest(path, allow_empty=False):
+    """Validate the first XLSX worksheet and index models by relative path."""
     models = {}
     try:
         from openpyxl import load_workbook
@@ -79,6 +84,7 @@ def load_manifest(path, allow_empty=False):
                 if any(values[len(header):]):
                     raise ValueError('unexpected values beyond the header')
                 row = dict(zip(header, values))
+                # Descriptive metadata is not the unique catalog key.
                 key = (row['name'], row['version'])
                 if not row['name'] or not row['filename']:
                     raise ValueError('name and filename are required')
@@ -104,6 +110,7 @@ def load_manifest(path, allow_empty=False):
         workbook.close()
     if not models and not allow_empty:
         raise ValueError('empty manifest refused as a deletion safeguard')
+    # A catalog file cannot also serve as another model's parent directory.
     for rel in models:
         if any(parent in models for parent in rel.parents):
             raise ValueError(f'file/directory conflict in XLSX: {rel}')
@@ -111,6 +118,7 @@ def load_manifest(path, allow_empty=False):
 
 
 def scan(root):
+    """Inventory regular files and directories without following symbolic links."""
     files, dirs = {}, set()
     if not root.exists():
         return files, dirs
@@ -134,6 +142,7 @@ def scan(root):
 
 
 def sha256(path):
+    """Hash a file incrementally to bound memory usage."""
     h = hashlib.sha256()
     with path.open('rb') as f:
         for data in iter(lambda: f.read(CHUNK), b''):
@@ -142,16 +151,19 @@ def sha256(path):
 
 
 def problem(model, path, verify):
+    """Return the first file mismatch, optionally checking its SHA-256 digest."""
     if path is None:
         return 'missing'
     if path.stat().st_size != model.size:
         return 'size mismatch'
+    # Normal synchronization uses size; explicit verification also hashes existing files.
     if verify and sha256(path) != model.sha256:
         return 'SHA-256 mismatch'
     return None
 
 
 def token_key(url):
+    """Select the credential variable for a recognized download host."""
     host = urlsplit(url).hostname
     if host in ('civitai.com', 'www.civitai.com', 'civitai.red', 'www.civitai.red'):
         return 'TOKEN_CA'
@@ -161,6 +173,7 @@ def token_key(url):
 
 
 def load_token_file(script_dir):
+    """Parse literal environment assignments without executing shell code."""
     path = discover_db(script_dir) / 'token-db.env'
     if not path.exists():
         return {}
@@ -178,11 +191,13 @@ def load_token_file(script_dir):
                 raise ValueError(f'invalid environment assignment in token-db.env, line {number}')
             if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
                 value = value[1:-1]
+            # Later assignments override earlier ones; values are never shell-expanded.
             tokens[key] = value
     return tokens
 
 
 def auth_token(url):
+    """Resolve a host-specific token, preferring the process environment."""
     key = token_key(url)
     if key is None:
         return None
@@ -190,15 +205,19 @@ def auth_token(url):
 
 
 class DownloadError(RuntimeError):
+    """Transfer protocol failure with a diagnostic safe for progress output."""
+
     pass
 
 
 def partial_paths(rel):
+    """Derive the payload, metadata and scratch paths reserved for a transfer."""
     return tuple(rel.with_name(rel.name + suffix) for suffix in
                  ('.part', '.part.json', '.part.json.tmp'))
 
 
 def stream(client, url, headers):
+    """Open a streaming HTTPS response with explicit, credential-safe redirects."""
     # Explicit redirects: never forward credentials across origins.
     for _ in range(11):
         source = urlsplit(url)
@@ -235,6 +254,7 @@ def download_segment(client, model, temp, headers, etag, total, block, index):
     """Retry one exact byte range and flush its bytes before acknowledging it."""
     import httpx
 
+    # Each worker owns a disjoint inclusive byte interval in the shared payload.
     lo, hi = index * block, min(total, (index + 1) * block) - 1
     request_headers = dict(headers, Range=f'bytes={lo}-{hi}')
     if etag:
@@ -263,6 +283,7 @@ def download_segment(client, model, temp, headers, etag, total, block, index):
         except (httpx.HTTPError, OSError, DownloadError):
             if attempt == 5:
                 raise
+            # Bound exponential backoff between attempts.
             time.sleep(min(2 ** attempt, 16))
 
 
@@ -276,6 +297,7 @@ def save_download_state(scratch, state_path, state):
 
 
 def load_download_state(state_path, identity, temp):
+    """Reuse metadata only when the payload exists and its catalog identity matches."""
     try:
         state = json.loads(state_path.read_text())
     except (OSError, ValueError):
@@ -304,11 +326,13 @@ def probe_range_support(client, url, headers):
 
 
 def transfer(model, temp, state_path, scratch, connections, progress=None):
+    """Fetch a payload using resumable ranges or a sequential fallback."""
     import httpx
     headers = {'User-Agent': 'comfy-model-sync/0.1', 'Accept-Encoding': 'identity'}
     token = auth_token(model.url)
     if token:
         headers['Authorization'] = f'Bearer {token}'
+    # Bind resume metadata to the expected content and URL without storing the URL itself.
     identity = {'hash': model.sha256, 'size': model.size,
                 'url_hash': hashlib.sha256(model.url.encode()).hexdigest()}
     started = time.monotonic()
@@ -327,6 +351,7 @@ def transfer(model, temp, state_path, scratch, connections, progress=None):
 
     with httpx.Client(timeout=httpx.Timeout(connect=10.0, read=15.0, write=10.0, pool=10.0), follow_redirects=False, trust_env=False) as client:
         state = load_download_state(state_path, identity, temp)
+        # Completed payloads still undergo size and hash validation in download().
         if state.get('complete'):
             return
         total, etag = probe_range_support(client, model.url, headers)
@@ -355,6 +380,7 @@ def transfer(model, temp, state_path, scratch, connections, progress=None):
             # Fixed chunks allow resumption even when concurrency changes.
             block = RANGE_BLOCK
             count = (total + block - 1) // block
+            # Cross-run reuse requires a strong matching ETag and consistent payload length.
             resumable = (
                 bool(state) and temp.exists() and bool(etag)
                 and state.get('etag') == etag
@@ -364,6 +390,7 @@ def transfer(model, temp, state_path, scratch, connections, progress=None):
             if not resumable:
                 state = {}
             completed = {i for i in state.get('completed', []) if isinstance(i, int) and 0 <= i < count}
+            # Allocate the full logical length before workers write at their own offsets.
             with temp.open('r+b' if state else 'w+b') as f:
                 f.truncate(total)
             state = {'identity': identity, 'etag': etag, 'total': total, 'completed': sorted(completed)}
@@ -386,6 +413,7 @@ def transfer(model, temp, state_path, scratch, connections, progress=None):
                     except Exception as e:
                         failures.append(e)
                         continue
+                    # Only the coordinator records ranges after workers have flushed them.
                     completed.add(i)
                     received += size
                     done += size
@@ -395,26 +423,31 @@ def transfer(model, temp, state_path, scratch, connections, progress=None):
                         report(done, total)
                         last = time.monotonic()
             report(done, total)
+            # Preserve successful ranges even if another range exhausts its retries.
             if failures:
                 raise failures[0]
         save_download_state(scratch, state_path, {'identity': identity, 'complete': True})
 
 
 def download(model, root, connections=4, progress=None):
+    """Validate a downloaded file or ZIP member before publishing the model."""
     target = root.joinpath(*model.path.parts)
     target.parent.mkdir(parents=True, exist_ok=True)
     temp, state_path, scratch = (root.joinpath(*p.parts) for p in partial_paths(model.path))
     extracted = None
     try:
         transfer(model, temp, state_path, scratch, connections, progress)
+        # Check the direct payload first: some model formats are themselves ZIP containers.
         candidate = temp
         if not (temp.stat().st_size == model.size and sha256(temp) == model.sha256) and is_zipfile(temp):
             with ZipFile(temp) as archive:
+                # Select members by expected size and digest, not by archive filename.
                 matches = [entry for entry in archive.infolist()
                            if not entry.is_dir() and entry.file_size == model.size]
                 if not matches:
                     raise ValueError('ZIP contains no file of expected size')
                 for entry in matches:
+                    # Stream into a local temporary file instead of trusting archive paths.
                     with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.model-sync-', suffix='.part', delete=False) as f:
                         extracted = Path(f.name)
                         count = 0
@@ -438,6 +471,7 @@ def download(model, root, connections=4, progress=None):
             raise ValueError(f'download size mismatch (expected {model.size} bytes, got {candidate.stat().st_size} bytes)')
         if sha256(candidate) != model.sha256:
             raise ValueError('download SHA-256 mismatch')
+        # Publish only verified content; keep temporary files on the target filesystem.
         os.replace(candidate, target)
         temp.unlink(missing_ok=True)
         state_path.unlink(missing_ok=True)
@@ -453,6 +487,7 @@ def download(model, root, connections=4, progress=None):
 
 
 def record(args):
+    """Rebuild the catalog from disk while retaining existing rows by relative path."""
     from openpyxl import Workbook, load_workbook
     destination = args.database.resolve()
     root = args.models_dir.resolve(strict=True)
@@ -478,10 +513,12 @@ def record(args):
     files, _ = scan(root)
     rows = []
     for rel, path in sorted(files.items()):
+        # Interrupted transfers are not installed models and must not enter the catalog.
         if rel.name.endswith(('.part', '.part.json', '.part.json.tmp')):
             continue
         folder = rel.parent.as_posix() if rel.parent != PurePosixPath('.') else ''
         relative_path(folder, rel.name)
+        # Existing rows retain metadata (including size and hash); new rows are measured.
         if rel in existing:
             row = existing[rel]
             row[FIELDS.index('Enable')] = 'X'
@@ -516,6 +553,8 @@ def record(args):
 
 @dataclass(frozen=True)
 class ModelPlan:
+    """Selected downloads, extra files to delete and existing size matches."""
+
     downloads: list[tuple[Model, str]]
     deletions: list[PurePosixPath]
     matches: int
@@ -597,13 +636,16 @@ def plan_changes(args, models, files):
                     raise ValueError(f'{rel}: {reason}; missing download link (Link = ?)')
                 downloads.append((model, reason))
     if args.command in ('update', 'remove'):
+        # Preserve resume files for downloads included in this plan.
         keep = {p for model, _ in downloads for p in partial_paths(model.path)}
         deletions = sorted(set(files) - set(models) - keep)
+    # Schedule smaller models first, with deterministic path ordering for ties.
     downloads.sort(key=lambda item: (item[0].size, item[0].path))
     return ModelPlan(downloads, deletions, matches)
 
 
 def show_plan(args, root, plan):
+    """Display the selected operations and their aggregate counts."""
     downloads, deletions, matches = plan.downloads, plan.deletions, plan.matches
     print(f'{args.command.upper()}{" (DRY RUN)" if args.dry_run else ""}: {root}', flush=True)
     print(f'{matches} matches, {len(downloads)} downloads, {len(deletions)} deletions', flush=True)
@@ -643,6 +685,7 @@ def download_error_detail(error):
 def run_downloads(args, root, plan):
     """Execute concurrent downloads with the existing progress reporting."""
     downloads, deletions, matches = plan.downloads, plan.deletions, plan.matches
+    # Serialize terminal rendering and shared progress counters across model workers.
     lock = threading.Lock()
     active = {}
     finished = 0
@@ -662,6 +705,7 @@ def run_downloads(args, root, plan):
         if not tty:
             return
         lines = [entry[0] for entry in active.values()]
+        # Archive payload sizes may differ from catalog sizes, so aggregate progress is estimated.
         estimated = successful_bytes + sum(entry[1] * entry[3] for entry in active.values())
         speed = sum(entry[2] for entry in active.values())
         fraction = min(estimated / planned_bytes, 1) if planned_bytes else 1
@@ -716,6 +760,7 @@ def run_downloads(args, root, plan):
 
 
 def run(args):
+    """Dispatch the requested mode and perform preflight before modifying files."""
     if args.command == 'check' and args.dry_run:
         return 0
     if args.database.suffix.lower() != '.xlsx':
@@ -735,6 +780,7 @@ def run(args):
     if manifest.is_relative_to(root):
         raise ValueError('XLSX must be outside the models directory')
     catalog = load_manifest(manifest)
+    # Disabled rows are excluded from the desired mirror but still reserve catalog paths.
     models = {rel: model for rel, model in catalog.items() if model.enabled}
     files, dirs = scan(root)
     validate_disk_layout(catalog, models, files, dirs)
@@ -753,6 +799,7 @@ def run(args):
 
 
 def discover_db(script_dir):
+    """Locate the unique database directory adjacent to the repository."""
     databases = sorted(p for p in script_dir.parent.glob('comfy-db*') if p.is_dir())
     if len(databases) != 1:
         raise ValueError(f'expected exactly one comfy-db* directory; found {len(databases)}')
@@ -760,10 +807,12 @@ def discover_db(script_dir):
 
 
 def discover_database(script_dir):
+    """Return the default model catalog path."""
     return discover_db(script_dir) / 'model-db.xlsx'
 
 
 def resolve_defaults(args):
+    """Resolve omitted catalog and model directory arguments."""
     script_dir = Path(__file__).resolve().parent.parent
     if args.database is None:
         args.database = discover_database(script_dir)
@@ -775,6 +824,7 @@ def resolve_defaults(args):
 
 
 def main(argv=None):
+    """Parse CLI options and report expected failures with a nonzero exit status."""
     parser = argparse.ArgumentParser(
         description=__doc__,
         epilog=(
