@@ -81,12 +81,44 @@ class Tests(unittest.TestCase):
         self.assertEqual(model.size, 4)
         self.assertFalse(model.enabled)
 
-    def test_case_insensitive_logical_duplicate(self):
+    def test_case_insensitive_descriptive_duplicate_allowed(self):
         first = self.row.copy(); first[1] = 'V1-Beta'
         second = first.copy(); second[0] = 'mODEL'; second[1] = 'v1-beta'; second[2] = 'MODEL.BIN'; second[7] = ''
         self.write(first, second)
         code, out = self.call('check')
-        self.assertEqual(code, 1); self.assertIn('duplicate name + version', out)
+        self.assertEqual(code, 0); self.assertEqual(len(m.load_manifest(self.manifest)), 2)
+
+    def test_placeholder_identity_in_distinct_folders(self):
+        first = self.row.copy()
+        first[0] = first[1] = first[6] = '?'
+        second = first.copy()
+        second[5] = 'other'
+        self.write(first, second)
+        self.assertEqual(self.call('check')[0], 0)
+        self.assertEqual(len(m.load_manifest(self.manifest)), 2)
+
+    def test_unknown_link_sync(self):
+        row = self.row.copy()
+        row[6] = '?'
+        self.write(row)
+        with patch.object(m, 'download') as download:
+            code, out = self.call('sync')
+            self.assertEqual(code, 1)
+            self.assertIn('checkpoints/model.bin', out)
+            self.assertIn('missing download link', out)
+            self.assertTrue(self.extra.exists())
+            self.target.write_bytes(self.data)
+            self.assertEqual(self.call('sync')[0], 0)
+            download.assert_not_called()
+
+    def test_unknown_link_disabled(self):
+        row = self.row.copy()
+        row[6] = '?'
+        row[7] = ''
+        self.write(row)
+        with patch.object(m, 'download') as download:
+            self.assertEqual(self.call('sync')[0], 0)
+            download.assert_not_called()
 
     def test_case_sensitive_physical_paths(self):
         second = self.row.copy(); second[0] = 'Other'; second[2] = 'Model.bin'
@@ -415,7 +447,7 @@ class Tests(unittest.TestCase):
         self.write(self.row, self.row)
         code, out = self.call('check')
         self.assertEqual(code, 1)
-        self.assertIn('duplicate name + version', out)
+        self.assertIn('duplicate Folder + Filename', out)
         self.assertTrue(self.extra.exists())
 
     def test_check_dry_run_does_nothing(self):

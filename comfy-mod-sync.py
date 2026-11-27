@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Mirror a ComfyUI models directory against a versioned XLSX manifest."""
+"""Mirror a ComfyUI models directory against a versioned XLSX manifest.
+
+Folder + Filename is the primary key. Name + Version is a partial descriptive
+identifier, may contain ? placeholders, and need not be unique. Link may be ?
+when the download URL is unknown; a required download then fails explicitly.
+"""
 import argparse
 import hashlib
 import os
@@ -39,7 +44,7 @@ def relative_path(directory, filename):
 
 
 def load_manifest(path):
-    models, logical = {}, set()
+    models = {}
     try:
         from openpyxl import load_workbook
     except ImportError:
@@ -71,25 +76,22 @@ def load_manifest(path):
                 key = (row['name'], row['version'])
                 if not row['name'] or not row['filename']:
                     raise ValueError('name and filename are required')
-                logical_key = tuple(value.casefold() for value in (*key, row['filename']))
-                if logical_key in logical:
-                    raise ValueError('duplicate name + version + filename')
                 rel = relative_path(row['folder'], row['filename'])
                 if rel in models:
-                    raise ValueError('duplicate subdirectory + filename')
+                    raise ValueError('duplicate Folder + Filename')
                 if not re.fullmatch(r'[0-9]+', row['size']):
                     raise ValueError('size must be an integer in bytes')
                 digest = row['hash'].lower()
                 if not re.fullmatch(r'[0-9a-f]{64}', digest):
                     raise ValueError('invalid SHA-256')
-                u = urlsplit(row['link'])
-                if u.scheme != 'https' or not u.hostname or u.username is not None or u.password is not None:
-                    raise ValueError('a direct HTTPS download URL without userinfo is required')
+                if row['link'] != '?':
+                    u = urlsplit(row['link'])
+                    if u.scheme != 'https' or not u.hostname or u.username is not None or u.password is not None:
+                        raise ValueError('a direct HTTPS download URL without userinfo is required')
                 enabled = row['enable'].lower()
                 if enabled not in ('x', ''):
                     raise ValueError('enabled must be X (case insensitive) or empty')
                 models[rel] = Model(*key, rel, int(row['size']), digest, row['link'], enabled == 'x')
-                logical.add(logical_key)
             except ValueError as e:
                 raise ValueError(f'XLSX row {number}: {e}') from None
     finally:
@@ -308,6 +310,8 @@ def run(args):
         if args.command in ('sync', 'add'):
             reason = problem(model, files.get(rel), False)
             if reason:
+                if model.url == '?':
+                    raise ValueError(f'{rel}: {reason}; missing download link (Link = ?)')
                 downloads.append((model, reason))
     if args.command in ('sync', 'remove'):
         deletions = sorted(set(files) - set(models))
