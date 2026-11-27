@@ -6,24 +6,26 @@ identifier, may contain ? placeholders, and need not be unique. Link may be ?
 when the download URL is unknown; a required download then fails explicitly.
 """
 import argparse
-import shutil
-from contextlib import closing
 import hashlib
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
-from pathlib import Path, PurePosixPath
 import re
+import shutil
 import sys
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import closing
 from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from urllib.parse import urljoin, urlsplit
 from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile, ZipFile, is_zipfile
-from urllib.parse import urlsplit, urljoin
 
 FIELDS = ('Name', 'Version', 'Folder', 'Filename', 'Size', 'Hash', 'Link', 'Enable')
 CHUNK = 1024 * 1024
+RANGE_BLOCK = 16 * CHUNK
 
 @dataclass(frozen=True)
 class Model:
@@ -199,20 +201,32 @@ def partial_paths(rel):
 def stream(client, url, headers):
     # Explicit redirects: never forward credentials across origins.
     for _ in range(11):
-        u = urlsplit(url)
-        if u.scheme != 'https' or not u.hostname or u.username is not None or u.password is not None:
+        source = urlsplit(url)
+        if (source.scheme != 'https' or not source.hostname
+                or source.username is not None or source.password is not None):
             raise DownloadError('unsafe download redirect')
-        response = client.send(client.build_request('GET', url, headers=headers), stream=True)
+
+        response = client.send(
+            client.build_request('GET', url, headers=headers), stream=True
+        )
         if response.status_code not in (301, 302, 303, 307, 308):
             return response
+
         location = response.headers.get('location')
         response.close()
         if not location:
             raise DownloadError('redirect without location')
+
         next_url = urljoin(url, location)
-        v = urlsplit(next_url)
-        if (u.scheme, u.hostname, u.port or 443) != (v.scheme, v.hostname, v.port or 443):
-            headers = {k: v for k, v in headers.items() if k.lower() != 'authorization'}
+        destination = urlsplit(next_url)
+        old_origin = source.scheme, source.hostname, source.port or 443
+        new_origin = destination.scheme, destination.hostname, destination.port or 443
+        if old_origin != new_origin:
+            headers = {
+                name: value
+                for name, value in headers.items()
+                if name.lower() != 'authorization'
+            }
         url = next_url
     raise DownloadError('too many redirects')
 
@@ -339,7 +353,7 @@ def transfer(model, temp, state_path, scratch, connections, progress=None):
                 report(received, length)
         else:
             # Fixed chunks allow resumption even when concurrency changes.
-            block = 16 * 1024 * 1024
+            block = RANGE_BLOCK
             count = (total + block - 1) // block
             resumable = (
                 bool(state) and temp.exists() and bool(etag)
@@ -598,10 +612,37 @@ def show_plan(args, root, plan):
     for rel in deletions:
         print(f'DELETE   {rel}', flush=True)
 
+def download_error_detail(error):
+    """Report known-safe errors without including request URLs or tokens."""
+    detail = type(error).__name__
+    if isinstance(error, ValueError):
+        message = str(error)
+        safe_messages = {
+            'unsafe download redirect',
+            'ZIP contains no file of expected size',
+            'ZIP contains no file with expected SHA-256',
+            'extracted model larger than expected',
+            'download SHA-256 mismatch',
+        }
+        if message in safe_messages:
+            detail += f': {message}'
+        elif (
+            message.startswith('download size mismatch (expected ')
+            and message.endswith(' bytes)')
+            and message.removeprefix('download size mismatch (expected ')
+                .removesuffix(' bytes)').replace(' bytes, got ', '').isdigit()
+        ):
+            detail += f': {message}'
+    elif isinstance(error, DownloadError):
+        detail += f': {error}'
+    elif isinstance(getattr(error, 'code', None), int):
+        detail += f': HTTP {error.code}'
+    return detail
+
+
 def run_downloads(args, root, plan):
     """Execute concurrent downloads with the existing progress reporting."""
     downloads, deletions, matches = plan.downloads, plan.deletions, plan.matches
-    import threading
     lock = threading.Lock()
     active = {}
     finished = 0
@@ -663,20 +704,9 @@ def run_downloads(args, root, plan):
                 future.result()
                 finish(model, f'COMPLETE {model.path}', True)
                 continue
-            except Exception as e:
+            except Exception as error:
                 failures += 1
-                # Avoid printing request URLs (which could contain credentials).
-                detail = type(e).__name__
-                if isinstance(e, ValueError):
-                    message = str(e)
-                    if message in ["unsafe download redirect","ZIP contains no file of expected size","ZIP contains no file with expected SHA-256","extracted model larger than expected","download SHA-256 mismatch"]:
-                        detail += f': {message}'
-                    elif message.startswith('download size mismatch (expected ') and message.endswith(' bytes)') and message.removeprefix('download size mismatch (expected ').removesuffix(' bytes)').replace(' bytes, got ', '').isdigit():
-                        detail += f': {message}'
-                elif isinstance(e, DownloadError):
-                    detail += f': {e}'
-                elif isinstance(getattr(e, 'code', None), int):
-                    detail += f': HTTP {e.code}'
+                detail = download_error_detail(error)
                 finish(model, f'Error: download failed for {model.path}: {detail}', False)
     print(f'{matches} matches, {len(downloads) - failures} downloads completed, {failures} failed, {len(deletions)} deletions', flush=True)
     if failures:
@@ -745,11 +775,31 @@ def resolve_defaults(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__, epilog="Credentials: TOKEN_CA and TOKEN_HF in the environment, or token-db.env in a unique ../comfy-db* directory relative to the script.")
-    parser.add_argument('command', nargs='?', choices=('update', 'add', 'remove', 'verify', 'check', 'record'), default='update', help='default: update; verify checks model files; check validates the XLSX only')
-    parser.add_argument('--database', type=Path, help='XLSX manifest (default: model-db.xlsx in unique ../comfy-db* directory relative to script)')
-    parser.add_argument('--directory', dest='models_dir', type=Path, help='dedicated models root (default: ../comfy-models relative to script)')
-    parser.add_argument('--dry-run', action='store_true', help='print the plan without writes, downloads or hash checks; check --dry-run does nothing')
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=(
+            'Credentials: TOKEN_CA and TOKEN_HF in the environment, or '
+            'token-db.env in a unique ../comfy-db* directory relative to the script.'
+        ),
+    )
+    parser.add_argument(
+        'command', nargs='?',
+        choices=('update', 'add', 'remove', 'verify', 'check', 'record'),
+        default='update',
+        help='default: update; verify checks model files; check validates the XLSX only',
+    )
+    parser.add_argument(
+        '--database', type=Path,
+        help='XLSX manifest (default: model-db.xlsx in unique ../comfy-db* directory relative to script)',
+    )
+    parser.add_argument(
+        '--directory', dest='models_dir', type=Path,
+        help='dedicated models root (default: ../comfy-models relative to script)',
+    )
+    parser.add_argument(
+        '--dry-run', action='store_true',
+        help='print the plan without writes, downloads or hash checks; check --dry-run does nothing',
+    )
     parser.add_argument('--parallel-downloads', type=int, default=8)
     parser.add_argument('--connections-per-download', type=int, default=4)
     args = parser.parse_args(argv)
