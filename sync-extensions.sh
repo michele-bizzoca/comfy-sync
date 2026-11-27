@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-self_dir="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
-py="$self_dir/../comfy-ui/.venv/bin/python"
-exec "$py" "$self_dir/python/sync-extensions.py" "$@"
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+python="$script_dir/../comfy-ui/.venv/bin/python"
+
+exec "$python" "$script_dir/python/sync-extensions.py" "$@"
