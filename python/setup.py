@@ -40,17 +40,6 @@ def capture(*args) -> str:
     return run(*args, stdout=subprocess.PIPE, text=True).stdout.strip()
 
 
-def versions(db: Path) -> tuple[str, str, str]:
-    """Load and validate the ComfyUI, Python and CUDA-enabled Torch version pins."""
-    # Clear inherited version pins so missing database entries cannot be masked.
-    data = subprocess.check_output(["bash", "-c", 'unset COMFY_VERSION PYTHON_VERSION TORCH_VERSION; set -a; source "$1" >&2 || exit; env -0', "bash", str(db / "version-db.env")])
-    env = dict(os.fsdecode(x).split("=", 1) for x in data.split(b"\0") if b"=" in x)
-    values = tuple(env.get(k, "") for k in ("COMFY_VERSION", "PYTHON_VERSION", "TORCH_VERSION"))
-    if not all(re.fullmatch(p, v) for p, v in zip((r"[0-9]+\.[0-9]+\.[0-9]+", r"3\.[0-9]+", r"[0-9]+\.[0-9]+\.[0-9]+\+cu[0-9]+"), values)):
-        raise ValueError("Invalid version-db.env")
-    return values
-
-
 def sync(name, *args, **kwargs):
     """Invoke a catalog synchronizer using the managed Python interpreter."""
     run(PY, SELF / ("sync-" + name + ".py"), *args, **kwargs)
@@ -144,7 +133,7 @@ def verify_environment(tv: str, required: str) -> None:
 def main() -> None:
     """Run the setup phases in dependency order, stopping on failure."""
     db = database()
-    comfy_version, python_version, torch_version = versions(db)
+    comfy_version, python_version, torch_version = capture(sys.executable, SELF / "sync-versions.py", "check", "--database", db / "version-db.env").splitlines()
     cuda, required = check_driver(torch_version)
     checkout_comfy(comfy_version)
     prepare_directories()
@@ -155,7 +144,7 @@ def main() -> None:
     verify_environment(torch_version, required)
     # Download models only after the runtime and extensions pass validation.
     sync("models", "update")
-    shutil.copyfile(db / "config-db.json", COMFY / "user/default/comfy.settings.json")
+    sync("config", "update", "--database", db / "config-db.json")
 
 if __name__ == "__main__":
     try:
