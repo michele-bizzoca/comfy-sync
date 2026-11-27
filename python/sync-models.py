@@ -470,64 +470,47 @@ def record(args):
     return 0
 
 
-def run(args):
-    if args.command == 'check' and args.dry_run:
-        return 0
-    if args.database.suffix.lower() != '.xlsx':
-        raise ValueError('manifest must have the .xlsx extension')
-    if args.command == 'record':
-        return record(args)
-    manifest = args.database.resolve(strict=True)
-    if args.command == 'check':
-        catalog = load_manifest(manifest)
-        enabled = sum(model.enabled for model in catalog.values())
-        print(f'CHECK: {manifest}', flush=True)
-        print(f'XLSX valid: {len(catalog)} entries, {enabled} enabled, {len(catalog) - enabled} disabled', flush=True)
-        return 0
-    root = args.models_dir.resolve()
-    if root == Path(root.anchor) or root == Path.home().resolve() or root == Path.cwd().resolve():
-        raise ValueError('refusing root, home or current working directory as models root')
-    if manifest.is_relative_to(root):
-        raise ValueError('XLSX must be outside the models directory')
-    catalog = load_manifest(manifest)
-    models = {rel: model for rel, model in catalog.items() if model.enabled}
-    files, dirs = scan(root)
-    reserved = {p for rel in models for p in partial_paths(rel)}
-    if reserved & set(catalog) or reserved & dirs or any(parent in reserved for rel in catalog for parent in rel.parents):
-        raise ValueError('partial download path conflicts with catalog or directory')
-    for rel in models:
-        if rel in dirs or any(parent in files for parent in rel.parents):
-            raise ValueError(f'file/directory conflict on disk: {rel}')
-    if args.command == 'verify':
-        # Dry run lists the plan without reading or validating file contents.
-        if args.dry_run:
-            print(f'VERIFY (DRY RUN): {root}', flush=True)
-            present = sorted(set(models) & set(files))
-            missing = sorted(set(models) - set(files))
-            extras = sorted(set(files) - set(models))
-            for rel in present:
-                print(f'VERIFY   {rel}', flush=True)
-            for rel in missing:
-                print(f'MISSING  {rel}', flush=True)
-            for rel in extras:
-                print(f'EXTRA    {rel}', flush=True)
-            print(f'{len(present)} files to verify, {len(missing)} missing, {len(extras)} extra files', flush=True)
-            return 0
-        # Read-only check of the entire mirror, including unexpected files.
-        print(f'VERIFY: {root}', flush=True)
-        invalid = 0
-        for rel, model in sorted(models.items()):
-            reason = problem(model, files.get(rel), True)
-            if reason:
-                print(f'INVALID  {rel} ({reason})', flush=True)
-                invalid += 1
-            else:
-                print(f'OK       {rel}', flush=True)
+@dataclass(frozen=True)
+class ModelPlan:
+    downloads: list[tuple[Model, str]]
+    deletions: list[PurePosixPath]
+    matches: int
+
+
+def verify_models(root, models, files, dry_run):
+    """Read-only verification, including the no-hash dry-run mode."""
+    # Dry run lists the plan without reading or validating file contents.
+    if dry_run:
+        print(f'VERIFY (DRY RUN): {root}', flush=True)
+        present = sorted(set(models) & set(files))
+        missing = sorted(set(models) - set(files))
         extras = sorted(set(files) - set(models))
+        for rel in present:
+            print(f'VERIFY   {rel}', flush=True)
+        for rel in missing:
+            print(f'MISSING  {rel}', flush=True)
         for rel in extras:
             print(f'EXTRA    {rel}', flush=True)
-        print(f'{len(models) - invalid} valid, {invalid} missing or invalid, {len(extras)} extra files', flush=True)
-        return 1 if invalid or extras else 0
+        print(f'{len(present)} files to verify, {len(missing)} missing, {len(extras)} extra files', flush=True)
+        return 0
+    # Read-only check of the entire mirror, including unexpected files.
+    print(f'VERIFY: {root}', flush=True)
+    invalid = 0
+    for rel, model in sorted(models.items()):
+        reason = problem(model, files.get(rel), True)
+        if reason:
+            print(f'INVALID  {rel} ({reason})', flush=True)
+            invalid += 1
+        else:
+            print(f'OK       {rel}', flush=True)
+    extras = sorted(set(files) - set(models))
+    for rel in extras:
+        print(f'EXTRA    {rel}', flush=True)
+    print(f'{len(models) - invalid} valid, {invalid} missing or invalid, {len(extras)} extra files', flush=True)
+    return 1 if invalid or extras else 0
+
+def plan_changes(args, models, files):
+    """Determine downloads and extras without modifying the filesystem."""
     downloads, deletions = [], []
     matches = sum(not problem(model, files.get(rel), False) for rel, model in models.items())
     for rel, model in sorted(models.items()):
@@ -541,27 +524,21 @@ def run(args):
         keep = {p for model, _ in downloads for p in partial_paths(model.path)}
         deletions = sorted(set(files) - set(models) - keep)
     downloads.sort(key=lambda item: (item[0].size, item[0].path))
+    return ModelPlan(downloads, deletions, matches)
+
+
+def show_plan(args, root, plan):
+    downloads, deletions, matches = plan.downloads, plan.deletions, plan.matches
     print(f'{args.command.upper()}{" (DRY RUN)" if args.dry_run else ""}: {root}', flush=True)
     print(f'{matches} matches, {len(downloads)} downloads, {len(deletions)} deletions', flush=True)
     for model, reason in downloads:
         print(f'DOWNLOAD {model.path} ({reason})', flush=True)
     for rel in deletions:
         print(f'DELETE   {rel}', flush=True)
-    if args.dry_run:
-        return 0
-    if downloads:
-        try:
-            import httpx
-        except ImportError:
-            raise RuntimeError('downloads require httpx; install it in the venv') from None
-    # Validate fallback credentials before changing files. Never print token values.
-    for key in {token_key(model.url) for model, _ in downloads} - {None}:
-        if not os.environ.get(key):
-            load_token_file(Path(__file__).resolve().parent.parent)
-            break
-    # Free space by deleting extras before starting downloads.
-    for rel in deletions:
-        files[rel].unlink()
+
+def run_downloads(args, root, plan):
+    """Execute concurrent downloads with the existing progress reporting."""
+    downloads, deletions, matches = plan.downloads, plan.deletions, plan.matches
     import threading
     lock = threading.Lock()
     active = {}
@@ -643,6 +620,58 @@ def run(args):
     if failures:
         return 1
     return 0
+
+
+
+def run(args):
+    if args.command == 'check' and args.dry_run:
+        return 0
+    if args.database.suffix.lower() != '.xlsx':
+        raise ValueError('manifest must have the .xlsx extension')
+    if args.command == 'record':
+        return record(args)
+    manifest = args.database.resolve(strict=True)
+    if args.command == 'check':
+        catalog = load_manifest(manifest)
+        enabled = sum(model.enabled for model in catalog.values())
+        print(f'CHECK: {manifest}', flush=True)
+        print(f'XLSX valid: {len(catalog)} entries, {enabled} enabled, {len(catalog) - enabled} disabled', flush=True)
+        return 0
+    root = args.models_dir.resolve()
+    if root == Path(root.anchor) or root == Path.home().resolve() or root == Path.cwd().resolve():
+        raise ValueError('refusing root, home or current working directory as models root')
+    if manifest.is_relative_to(root):
+        raise ValueError('XLSX must be outside the models directory')
+    catalog = load_manifest(manifest)
+    models = {rel: model for rel, model in catalog.items() if model.enabled}
+    files, dirs = scan(root)
+    reserved = {p for rel in models for p in partial_paths(rel)}
+    if reserved & set(catalog) or reserved & dirs or any(parent in reserved for rel in catalog for parent in rel.parents):
+        raise ValueError('partial download path conflicts with catalog or directory')
+    for rel in models:
+        if rel in dirs or any(parent in files for parent in rel.parents):
+            raise ValueError(f'file/directory conflict on disk: {rel}')
+    if args.command == 'verify':
+        return verify_models(root, models, files, args.dry_run)
+
+    plan = plan_changes(args, models, files)
+    show_plan(args, root, plan)
+    if args.dry_run:
+        return 0
+    if plan.downloads:
+        try:
+            import httpx
+        except ImportError:
+            raise RuntimeError('plan.downloads require httpx; install it in the venv') from None
+    # Validate fallback credentials before changing files. Never print token values.
+    for key in {token_key(model.url) for model, _ in plan.downloads} - {None}:
+        if not os.environ.get(key):
+            load_token_file(Path(__file__).resolve().parent.parent)
+            break
+    # Free space by deleting extras before starting plan.downloads.
+    for rel in plan.deletions:
+        files[rel].unlink()
+    return run_downloads(args, root, plan)
 
 
 def discover_db(script_dir):
