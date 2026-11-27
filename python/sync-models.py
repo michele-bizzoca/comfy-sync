@@ -529,6 +529,7 @@ def run(args):
         print(f'{len(models) - invalid} valid, {invalid} missing or invalid, {len(extras)} extra files', flush=True)
         return 1 if invalid or extras else 0
     downloads, deletions = [], []
+    matches = sum(not problem(model, files.get(rel), False) for rel, model in models.items())
     for rel, model in sorted(models.items()):
         if args.command in ('update', 'add'):
             reason = problem(model, files.get(rel), False)
@@ -545,7 +546,7 @@ def run(args):
         print(f'DOWNLOAD {model.path} ({reason})', flush=True)
     for rel in deletions:
         print(f'DELETE   {rel}', flush=True)
-    print(f'{len(downloads)} downloads, {len(deletions)} deletions', flush=True)
+    print(f'{matches} matches, {len(downloads)} downloads, {len(deletions)} deletions', flush=True)
     if args.dry_run:
         return 0
     if downloads:
@@ -638,7 +639,7 @@ def run(args):
                 elif isinstance(getattr(e, 'code', None), int):
                     detail += f': HTTP {e.code}'
                 finish(model, f'Error: download failed for {model.path}: {detail}', False)
-    print(f'{len(downloads) - failures} downloads completed, {failures} failed, {len(deletions)} deletions', flush=True)
+    print(f'{matches} matches, {len(downloads) - failures} downloads completed, {failures} failed, {len(deletions)} deletions', flush=True)
     if failures:
         return 1
     return 0
