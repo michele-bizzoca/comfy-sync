@@ -6,6 +6,7 @@ identifier, may contain ? placeholders, and need not be unique. Link may be ?
 when the download URL is unknown; a required download then fails explicitly.
 """
 import argparse
+import shutil
 from contextlib import closing
 import hashlib
 import json
@@ -216,7 +217,7 @@ def stream(client, url, headers):
     raise DownloadError('too many redirects')
 
 
-def transfer(model, temp, state_path, scratch, connections):
+def transfer(model, temp, state_path, scratch, connections, progress=None):
     import httpx
     headers = {'User-Agent': 'comfy-model-sync/0.1', 'Accept-Encoding': 'identity'}
     token = auth_token(model.url)
@@ -238,8 +239,12 @@ def transfer(model, temp, state_path, scratch, connections):
         speed = received / max(time.monotonic() - started, .001) / 1048576
         fraction = min(done / total, 1) if total else 0
         bar = '#' * int(fraction * 20) + '-' * (20 - int(fraction * 20))
-        progress = f'[{bar}] {fraction:.1%} ' if total else ''
-        print(f'{model.path}: {progress}{done / 1048576:.1f} MiB  {speed:.1f} MiB/s', file=sys.stderr, flush=True)
+        bar_text = f'[{bar}] {fraction:.1%} ' if total else ''
+        line = f'{model.path}: {bar_text}{done / 1048576:.1f} MiB  {speed:.1f} MiB/s'
+        if progress is None:
+            print(line, file=sys.stderr, flush=True)
+        else:
+            progress(model.path, line, fraction, speed)
 
     with httpx.Client(timeout=60, follow_redirects=False, trust_env=False) as client:
         try:
@@ -300,11 +305,13 @@ def transfer(model, temp, state_path, scratch, connections):
                 request_headers = dict(headers, Range=f'bytes={lo}-{hi}')
                 if etag:
                     request_headers['If-Range'] = etag
-                for attempt in range(3):
+                for attempt in range(6):
                     try:
                         with closing(stream(client, model.url, request_headers)) as response:
                             if response.status_code != 206 or response.headers.get('content-range') != f'bytes {lo}-{hi}/{total}':
-                                raise DownloadError('range response mismatch')
+                                actual = response.headers.get('content-range', '')
+                                safe_actual = actual if re.fullmatch(r'bytes (?:[0-9]+-[0-9]+|\*)/(?:[0-9]+|\*)', actual) else 'missing or invalid'
+                                raise DownloadError(f'range response mismatch: expected bytes {lo}-{hi}/{total}; HTTP {response.status_code}; received {safe_actual}')
                             if etag and response.headers.get('etag') not in (None, etag):
                                 raise DownloadError('remote entity changed')
                             offset = lo
@@ -320,9 +327,9 @@ def transfer(model, temp, state_path, scratch, connections):
                                 os.fsync(f.fileno())
                         return i, hi - lo + 1
                     except (httpx.HTTPError, OSError, DownloadError):
-                        if attempt == 2:
+                        if attempt == 5:
                             raise
-                        time.sleep(attempt + 1)
+                        time.sleep(min(2 ** attempt, 16))
 
             failures = []
             done = sum(min(block, total - i * block) for i in completed)
@@ -349,15 +356,15 @@ def transfer(model, temp, state_path, scratch, connections):
         save({'identity': identity, 'complete': True})
 
 
-def download(model, root, connections=8):
+def download(model, root, connections=8, progress=None):
     target = root.joinpath(*model.path.parts)
     target.parent.mkdir(parents=True, exist_ok=True)
     temp, state_path, scratch = (root.joinpath(*p.parts) for p in partial_paths(model.path))
     extracted = None
     try:
-        transfer(model, temp, state_path, scratch, connections)
+        transfer(model, temp, state_path, scratch, connections, progress)
         candidate = temp
-        if is_zipfile(temp):
+        if not (temp.stat().st_size == model.size and sha256(temp) == model.sha256) and is_zipfile(temp):
             with ZipFile(temp) as archive:
                 matches = [entry for entry in archive.infolist()
                            if not entry.is_dir() and entry.file_size == model.size]
@@ -553,15 +560,67 @@ def run(args):
     # Free space by deleting extras before starting downloads.
     for rel in deletions:
         files[rel].unlink()
+    import threading
+    lock = threading.Lock()
+    active = {}
+    finished = 0
+    successful_bytes = 0
+    planned_bytes = sum(model.size for model, _ in downloads)
+    tty = sys.stderr.isatty()
+    drawn = 0
+
+    def clear():
+        nonlocal drawn
+        if tty and drawn:
+            sys.stderr.write(f'\x1b[{drawn}A\x1b[J')
+            drawn = 0
+
+    def render():
+        nonlocal drawn
+        if not tty:
+            return
+        lines = [entry[0] for entry in active.values()]
+        estimated = successful_bytes + sum(entry[1] * entry[3] for entry in active.values())
+        speed = sum(entry[2] for entry in active.values())
+        fraction = min(estimated / planned_bytes, 1) if planned_bytes else 1
+        lines.append(f'TOTAL (estimated): {fraction:.1%} | {speed:.1f} MiB/s | {finished}/{len(downloads)} finished')
+        width = shutil.get_terminal_size((100, 24)).columns
+        for line in lines:
+            sys.stderr.write(line[:max(1, width - 1)] + '\n')
+        sys.stderr.flush()
+        drawn = len(lines)
+
+    sizes = {model.path: model.size for model, _ in downloads}
+    def progress(path, line, fraction, speed):
+        with lock:
+            if not tty:
+                print(line, file=sys.stderr, flush=True)
+                return
+            clear()
+            active[path] = (line, fraction, speed, sizes[path])
+            render()
+
+    def finish(model, message, success):
+        nonlocal finished, successful_bytes
+        with lock:
+            clear()
+            active.pop(model.path, None)
+            finished += 1
+            if success:
+                successful_bytes += model.size
+            print(message, file=sys.stderr, flush=True)
+            if finished < len(downloads):
+                render()
+
     failures = 0
     with ThreadPoolExecutor(max_workers=args.parallel_downloads) as pool:
-        futures = {pool.submit(download, model, root, args.connections_per_download): model
+        futures = {pool.submit(download, model, root, args.connections_per_download, progress): model
                    for model, _ in downloads}
         for future in as_completed(futures):
             model = futures[future]
             try:
                 future.result()
-                print(f'COMPLETE {model.path}', flush=True)
+                finish(model, f'COMPLETE {model.path}', True)
                 continue
             except Exception as e:
                 failures += 1
@@ -577,7 +636,8 @@ def run(args):
                     detail += f': {e}'
                 elif isinstance(getattr(e, 'code', None), int):
                     detail += f': HTTP {e.code}'
-                print(f'Error: download failed for {model.path}: {detail}', file=sys.stderr, flush=True)
+                finish(model, f'Error: download failed for {model.path}: {detail}', False)
+    print(f'{len(downloads) - failures} downloads completed, {failures} failed, {len(deletions)} deletions', flush=True)
     if failures:
         return 1
     return 0
