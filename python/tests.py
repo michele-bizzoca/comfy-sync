@@ -228,20 +228,24 @@ class ModelTests(WorkspaceTestCase):
         self.assertIn('DELETE', out)
         self.assertTrue(self.extra.exists())
         self.assertFalse(self.target.exists())
+
     def test_add(self):
         with patch.object(models, 'download', self.fake_download):
             self.assertEqual(self.call('add')[0], 0)
         self.assertEqual(self.target.read_bytes(), self.data)
         self.assertTrue(self.extra.exists())
+
     def test_remove(self):
         self.assertEqual(self.call('remove')[0], 0)
         self.assertFalse(self.extra.exists())
         self.assertFalse(self.target.exists())
+
     def test_sync(self):
         with patch.object(models, 'download', self.fake_download):
             self.assertEqual(self.call()[0], 0)
         self.assertFalse(self.extra.exists())
         self.assertEqual(self.target.read_bytes(), self.data)
+
     def test_verify(self):
         self.target.write_bytes(b'evil')
         self.assertNotIn('DOWNLOAD', self.call('add', '--dry-run')[1])
@@ -253,18 +257,21 @@ class ModelTests(WorkspaceTestCase):
         self.assertIn('EXTRA', out)
         self.assertEqual(self.target.read_bytes(), b'evil')
         self.assertTrue(self.extra.exists())
+
     def test_verify_clean(self):
         self.target.write_bytes(self.data)
         self.extra.unlink()
         code, out = self.call('verify')
         self.assertEqual(code, 0)
         self.assertIn('1 valid', out)
+
     def test_verify_missing(self):
         code, out = self.call('verify')
         self.assertEqual(code, 1)
         self.assertIn('(missing)', out)
         self.assertFalse(self.target.exists())
         self.assertTrue(self.extra.exists())
+
     def test_verify_dry_run_missing(self):
         with patch.object(models, 'problem') as problem, patch.object(models, 'sha256') as sha:
             code, out = self.call('verify', '--dry-run')
@@ -276,6 +283,7 @@ class ModelTests(WorkspaceTestCase):
         self.assertIn('0 files to verify', out)
         self.assertFalse(self.target.exists())
         self.assertTrue(self.extra.exists())
+
     def test_verify_dry_run_present(self):
         self.target.write_bytes(b'evil')
         with patch.object(models, 'problem') as problem, patch.object(models, 'sha256') as sha, patch.object(models, 'download') as download:
@@ -290,17 +298,20 @@ class ModelTests(WorkspaceTestCase):
         self.assertNotIn('SHA-256 mismatch', out)
         self.assertEqual(self.target.read_bytes(), b'evil')
         self.assertTrue(self.extra.exists())
+
     def test_failed_download_deletes_extras_first(self):
         with patch.object(models, "download", side_effect=ValueError("failure")):
             code, output = self.call("update")
         self.assertEqual(code, 1, output)
         self.assertFalse(self.extra.exists())
         self.assertFalse(self.target.exists())
+
     def test_bad_manifest(self):
         for rows in ([], [self.row, self.row], [self.row[:5]+['../escape', *self.row[6:]]]):
             self.write(*rows)
             self.assertEqual(self.call('remove')[0], 1)
             self.assertTrue(self.extra.exists())
+
     def test_download_atomic(self):
         model = next(iter(models.load_manifest(self.manifest).values()))
         self.target.write_bytes(b"old")
@@ -319,6 +330,7 @@ class ModelTests(WorkspaceTestCase):
             models.download(model, self.root)
         self.assertEqual(self.target.read_bytes(), self.data)
         self.assertEqual(list(self.target.parent.iterdir()), [self.target])
+
     def test_direct_download_validates_bytes(self):
         model = next(iter(models.load_manifest(self.manifest).values()))
 
@@ -328,6 +340,7 @@ class ModelTests(WorkspaceTestCase):
         with patch.object(models, "transfer", side_effect=transfer):
             models.download(model, self.root)
         self.assertEqual(self.target.read_bytes(), self.data)
+
     def test_zip_downloads_select_by_size_and_hash(self):
         model = next(iter(models.load_manifest(self.manifest).values()))
         cases = [
@@ -356,6 +369,7 @@ class ModelTests(WorkspaceTestCase):
                             models.download(model, self.root)
                 self.assertEqual(self.target.read_bytes(), self.data if valid else b"old")
                 self.assertEqual(list(self.target.parent.iterdir()), [self.target])
+
     def test_composite_identity_and_blank_version(self):
         first = self.row.copy()
         first[1] = ''
@@ -525,6 +539,7 @@ class ModelTests(WorkspaceTestCase):
         ):
             with self.subTest(url=url):
                 self.assertEqual(models.token_key(url), expected)
+
     def test_missing_token_file_is_optional(self):
         script, _, _ = self.automatic_layout()
         with patch.object(models, '__file__', str(script)), patch.dict(os.environ, {}, clear=True):
@@ -555,6 +570,7 @@ class ModelTests(WorkspaceTestCase):
         self.assertIn("line 2", output)
         self.assertNotIn("secret-", output)
         self.assertTrue(self.extra.exists())
+
     def test_disabled_model_sync(self):
         self.target.write_bytes(self.data)
         self.write(self.row[:-1] + [''])
@@ -798,6 +814,7 @@ class ExtensionTests(WorkspaceTestCase):
         self.assertEqual(code, 1, output)
         self.assertFalse(extra.exists())
         self.assertIn("installations pending", output)
+
     def test_builtin_preserved(self):
         builtin = self.root / 'websocket_image_save.py'
         builtin.write_text('keep')
