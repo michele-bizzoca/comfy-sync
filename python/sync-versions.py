@@ -93,8 +93,8 @@ def main(argv=None):
     """Expose version operations without automatically upgrading the runtime."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("check", "verify", "record"))
-    parser.add_argument("--database", type=Path)
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--database", type=Path, help="database file (default: version-db.env in the unique sibling comfy-db* directory)")
+    parser.add_argument("--dry-run", action="store_true", help="skip the operation without reading or writing the database")
     args = parser.parse_args(argv)
     if args.dry_run:
         return 0

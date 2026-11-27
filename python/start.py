@@ -5,6 +5,7 @@ Load the token database, assemble the launch arguments and replace this
 process with the ComfyUI interpreter, forwarding all caller arguments.
 """
 
+import argparse
 import os
 import subprocess
 import sys
@@ -41,8 +42,13 @@ def envfile(path: Path) -> dict[str, str]:
 
 def main() -> None:
     """Build the managed launch configuration and execute ComfyUI."""
-    env = envfile(database() / "token-db.env")
     forwarded = sys.argv[1:]
+    # Handle wrapper help before reading credentials or launching ComfyUI.
+    if any(arg in ("-h", "--help") for arg in forwarded):
+        parser = argparse.ArgumentParser(description=__doc__, usage="%(prog)s [COMFYUI OPTIONS]", epilog="All other arguments are forwarded to ComfyUI. Defaults: --preview-method auto, --listen 0.0.0.0, --port 8188. For the complete upstream option list, run comfy-ui/main.py --help with the managed interpreter.")
+        parser.print_help()
+        return
+    env = envfile(database() / "token-db.env")
     # Bind to all interfaces and load the custom-node path configuration.
     args = [
         str(PYTHON),

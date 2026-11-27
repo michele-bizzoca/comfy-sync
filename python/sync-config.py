@@ -22,8 +22,8 @@ def main(argv=None):
     """Select the copy direction; record never changes the installed settings."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("update", "record"))
-    parser.add_argument("--database", type=Path)
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--database", type=Path, help="database file (default: config-db.json in the unique sibling comfy-db* directory)")
+    parser.add_argument("--dry-run", action="store_true", help="show copy direction without writing")
     args = parser.parse_args(argv)
     path = args.database if args.database is not None else database() / "config-db.json"
     settings = COMFY / "user/default/comfy.settings.json"

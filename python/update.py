@@ -5,6 +5,7 @@ Update extensions, models and user settings independently. Report version
 mismatches without automatically upgrading ComfyUI, Python or Torch.
 """
 
+import argparse
 import os
 import subprocess
 import sys
@@ -56,6 +57,8 @@ def update_extensions() -> None:
 
 def main() -> int:
     """Attempt all update phases and return a nonzero status if any phase fails."""
+    # Parse help before accessing the installation or database.
+    argparse.ArgumentParser(description=__doc__).parse_args()
     db = database()
     phases = (
         ("Extension sync", update_extensions),

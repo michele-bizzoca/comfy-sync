@@ -5,6 +5,7 @@ Capture the current installation into the sibling database, preserving
 existing catalog metadata and staging all outputs before publication.
 """
 
+import argparse
 import os
 import shutil
 import subprocess
@@ -42,6 +43,8 @@ def sync(name, *args, **kwargs):
 
 def main() -> None:
     """Validate the installation and record its current state."""
+    # Parse help before accessing the installation or database.
+    argparse.ArgumentParser(description=__doc__).parse_args()
     db = database()
     config = COMFY / "user/default/comfy.settings.json"
     if not config.is_file():

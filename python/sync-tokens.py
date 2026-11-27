@@ -40,8 +40,8 @@ def main(argv=None):
     """Check literal assignments without contacting remote services."""
     cli = argparse.ArgumentParser(description=__doc__)
     cli.add_argument("command", choices=("check",))
-    cli.add_argument("--database", type=Path)
-    cli.add_argument("--dry-run", action="store_true")
+    cli.add_argument("--database", type=Path, help="database file (default: token-db.env in the unique sibling comfy-db* directory)")
+    cli.add_argument("--dry-run", action="store_true", help="skip the operation without reading or writing the database")
     args = cli.parse_args(argv)
     if args.dry_run:
         return 0

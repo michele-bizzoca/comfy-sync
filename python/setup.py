@@ -6,6 +6,7 @@ Bootstrap the checkout, persistent directories and CUDA environment before
 synchronizing models and applying user settings.
 """
 
+import argparse
 import json
 import os
 import re
@@ -132,6 +133,8 @@ def verify_environment(tv: str, required: str) -> None:
 
 def main() -> None:
     """Run the setup phases in dependency order, stopping on failure."""
+    # Parse help before accessing the installation or database.
+    argparse.ArgumentParser(description=__doc__).parse_args()
     db = database()
     comfy_version, python_version, torch_version = capture(sys.executable, SELF / "sync-versions.py", "check", "--database", db / "version-db.env").splitlines()
     cuda, required = check_driver(torch_version)
