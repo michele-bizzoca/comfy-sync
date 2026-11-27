@@ -426,7 +426,7 @@ def resolve_defaults(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__, epilog="Credentials: CA_TOKEN and HF_TOKEN in the environment, or token-db.env in a unique ../comfy-db* directory relative to the script.")
+    parser = argparse.ArgumentParser(description=__doc__, epilog="Credentials: TOKEN_CA and TOKEN_HF in the environment, or token-db.env in a unique ../comfy-db* directory relative to the script.")
     parser.add_argument('command', nargs='?', choices=('update', 'add', 'remove', 'verify', 'check', 'record'), default='update', help='default: update; verify checks model files; check validates the XLSX only')
     parser.add_argument('--database', type=Path, help='XLSX manifest (default: model-db.xlsx in unique ../comfy-db* directory relative to script)')
     parser.add_argument('--directory', dest='models_dir', type=Path, help='dedicated models root (default: ../comfy-models relative to script)')
