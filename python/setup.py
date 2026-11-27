@@ -70,6 +70,8 @@ def prepare_directories() -> None:
         if src.is_dir() and not dst.exists() and not dst.is_symlink():
             shutil.move(str(src), str(dst))
         dst.mkdir(parents=True, exist_ok=True)
+    # ComfyUI still scans its built-in custom_nodes directory.
+    (COMFY / "custom_nodes").mkdir(parents=True, exist_ok=True)
     (COMFY / "user/default").mkdir(parents=True, exist_ok=True)
 
 
