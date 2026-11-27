@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 SELF = Path(__file__).resolve().parent
-PARENT = SELF.parent
+PARENT = SELF.parent.parent
 COMFY = PARENT / "comfy-ui"
 PY = COMFY / ".venv/bin/python"
 URL = "https://github.com/Comfy-Org/ComfyUI.git"
@@ -42,31 +42,12 @@ def sync(name, *args, **kwargs):
     run(PY, SELF / ("sync-" + name + ".py"), *args, **kwargs)
 
 def main():
-    db = database()
-    config = COMFY / "user/default/comfy.settings.json"
-    if not config.is_file():
-        raise RuntimeError("Missing ComfyUI settings: " + str(config))
-    tags = capture("git", "-C", COMFY, "tag", "--points-at", "HEAD").splitlines()
-    releases = [tag[1:] for tag in tags if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)]
-    if len(releases) != 1:
-        raise RuntimeError("Expected exactly one ComfyUI release tag at HEAD")
-    cv = releases[0]
-    pv = capture(PY, "-c", 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-    tv = capture(PY, "-c", "import torch; print(torch.__version__)")
-    if not re.fullmatch(r"3\.[0-9]+", pv) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+\+cu[0-9]+", tv):
-        raise ValueError("Installed Python or Torch version is incompatible with version-db.env")
-    with tempfile.TemporaryDirectory(prefix=".record.", dir=db) as directory:
-        stage = Path(directory)
-        for name in ("model-db.xlsx", "extension-db.xlsx"):
-            if (db / name).is_file():
-                shutil.copyfile(db / name, stage / name)
-        sync("extensions", "record", "--database", stage / "extension-db.xlsx")
-        sync("models", "record", "--database", stage / "model-db.xlsx")
-        shutil.copyfile(config, stage / "config-db.json")
-        (stage / "version-db.env").write_text(f"COMFY_VERSION={cv}\nPYTHON_VERSION={pv}\nTORCH_VERSION={tv}\n")
-        for name in ("extension-db.xlsx", "model-db.xlsx", "config-db.json", "version-db.env"):
-            os.replace(stage / name, db / name)
-    print(f"Recorded ComfyUI v{cv}, Python {pv}, Torch {tv}")
+    env = envfile(database() / "token-db.env")
+    port = sys.argv[1] if len(sys.argv) > 1 else "8188"
+    args = [str(PY), str(COMFY / "main.py"), "--preview-method", "auto", "--enable-manager", "--listen", "0.0.0.0", "--port", port, "--extra-model-paths-config", str(COMFY / "comfy-extension-paths.yaml"), "--verbose", "DETAIL"]
+    for name in ("models", "output", "input"):
+        args.extend(["--" + name + "-directory", str(PARENT / ("comfy-" + name))])
+    os.execve(str(PY), args, env)
 
 if __name__ == "__main__":
     try:

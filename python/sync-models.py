@@ -182,7 +182,7 @@ def auth_token(url):
     key = token_key(url)
     if key is None:
         return None
-    return os.environ.get(key) or load_token_file(Path(__file__).resolve().parent).get(key) or None
+    return os.environ.get(key) or load_token_file(Path(__file__).resolve().parent.parent).get(key) or None
 
 
 class DownloadError(RuntimeError):
@@ -547,7 +547,7 @@ def run(args):
     # Validate fallback credentials before changing files. Never print token values.
     for key in {token_key(model.url) for model, _ in downloads} - {None}:
         if not os.environ.get(key):
-            load_token_file(Path(__file__).resolve().parent)
+            load_token_file(Path(__file__).resolve().parent.parent)
             break
     # Free space by deleting extras before starting downloads.
     for rel in deletions:
@@ -594,7 +594,7 @@ def discover_database(script_dir):
 
 
 def resolve_defaults(args):
-    script_dir = Path(__file__).resolve().parent
+    script_dir = Path(__file__).resolve().parent.parent
     if args.database is None:
         args.database = discover_database(script_dir)
     if args.command != 'check' and args.models_dir is None:

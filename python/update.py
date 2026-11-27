@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 SELF = Path(__file__).resolve().parent
-PARENT = SELF.parent
+PARENT = SELF.parent.parent
 COMFY = PARENT / "comfy-ui"
 PY = COMFY / ".venv/bin/python"
 URL = "https://github.com/Comfy-Org/ComfyUI.git"

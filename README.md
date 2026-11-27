@@ -13,10 +13,10 @@ workspace/
     update.sh
     record.sh
     start.sh
-    sync-models.py
-    sync-extensions.py
+    python/sync-models.py
+    python/sync-extensions.py
     requirements.txt
-    tests.py
+    python/tests.py
   comfy-db-main/
     model-db.xlsx
     extension-db.xlsx
@@ -168,8 +168,8 @@ The model parser accepts arbitrary valid environment variable names, blank lines
 ## Python command reference
 
 ```sh
-python sync-models.py [update|add|remove|verify|check|record] [options]
-python sync-extensions.py [update|add|remove|verify|check|record] [options]
+python python/sync-models.py [update|add|remove|verify|check|record] [options]
+python python/sync-extensions.py [update|add|remove|verify|check|record] [options]
 ```
 
 | Mode | Models | Extensions |
@@ -194,12 +194,12 @@ Explicit paths are interpreted relative to the invoking working directory if not
 Examples:
 
 ```sh
-python sync-models.py check
-python sync-models.py update --dry-run
-python sync-models.py verify
-python sync-models.py record --database /tmp/model-db.xlsx
-python sync-extensions.py add --python ../comfy-ui/.venv/bin/python
-python sync-extensions.py verify --directory ../comfy-extensions
+python python/sync-models.py check
+python python/sync-models.py update --dry-run
+python python/sync-models.py verify
+python python/sync-models.py record --database /tmp/model-db.xlsx
+python python/sync-extensions.py add --python ../comfy-ui/.venv/bin/python
+python python/sync-extensions.py verify --directory ../comfy-extensions
 ```
 
 Exit status: 0 success (including dry-run plans), 1 operational/validation failure or real verify discrepancies, 2 argparse usage errors.
@@ -248,8 +248,8 @@ bash -n setup.sh update.sh record.sh start.sh
 Validate real catalogs without modifying them:
 
 ```sh
-python sync-models.py check --database ../comfy-db-main/model-db.xlsx
-python sync-extensions.py check --database ../comfy-db-main/extension-db.xlsx
+python python/sync-models.py check --database ../comfy-db-main/model-db.xlsx
+python python/sync-extensions.py check --database ../comfy-db-main/extension-db.xlsx
 ```
 
 The unit suite covers catalog validation, discovery, dry-run, record, download handling, extension reconciliation and requirements interpreter selection. A real GPU deployment and shell integration tests are separate from the Python unit suite.

@@ -247,8 +247,8 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.call('remove')[0], 1); self.assertTrue(self.extra.exists())
 
     def automatic_layout(self):
-        script_dir = self.base / 'model-sync'
-        script_dir.mkdir()
+        script_dir = self.base / 'model-sync' / 'python'
+        script_dir.mkdir(parents=True)
         db = self.base / 'comfy-db-personal'
         db.mkdir()
         xlsx_path = db / 'model-db.xlsx'
@@ -657,7 +657,7 @@ class ExtensionTests(unittest.TestCase):
         requirements = target / 'requirements.txt'
         requirements.touch()
         explicit = self.base / 'other-venv' / 'bin' / 'python'
-        default = Path(self.ext.__file__).resolve().parent.parent / 'comfy-ui' / '.venv' / 'bin' / 'python'
+        default = Path(self.ext.__file__).resolve().parent.parent.parent / 'comfy-ui' / '.venv' / 'bin' / 'python'
         for options, expected in (([], default), (['--python', str(explicit)], explicit)):
             with self.subTest(options=options), patch.object(self.ext, 'problem', return_value='missing'), patch.object(self.ext, 'clean'), patch.object(self.ext, 'install'), patch.object(self.ext.subprocess, 'run') as run:
                 self.assertEqual(self.call('add', *options)[0], 0)

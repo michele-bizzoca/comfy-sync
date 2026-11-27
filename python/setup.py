@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 SELF = Path(__file__).resolve().parent
-PARENT = SELF.parent
+PARENT = SELF.parent.parent
 COMFY = PARENT / "comfy-ui"
 PY = COMFY / ".venv/bin/python"
 URL = "https://github.com/Comfy-Org/ComfyUI.git"
@@ -79,7 +79,7 @@ def main():
     constraints = COMFY / ".venv/comfy-constraints.txt"
     constraints.write_text("torch==" + tv + "\n")
     os.environ["PIP_CONSTRAINT"] = str(constraints)
-    run(PY, "-m", "pip", "install", "httpx", "-r", SELF / "requirements.txt", "-r", COMFY / "requirements.txt")
+    run(PY, "-m", "pip", "install", "httpx", "-r", SELF.parent / "requirements.txt", "-r", COMFY / "requirements.txt")
     if (COMFY / "manager_requirements.txt").is_file():
         run(PY, "-m", "pip", "install", "-r", COMFY / "manager_requirements.txt")
     run(PY, "-m", "pip", "install", *"opencv-python-headless ultralytics matrix-nio imageio-ffmpeg onnxruntime-gpu PyOpenGL-accelerate scikit-image".split())

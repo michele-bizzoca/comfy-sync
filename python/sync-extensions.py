@@ -234,7 +234,7 @@ def main(argv=None):
     if a.command == 'check' and a.dry_run:
         return 0
     try:
-        base = Path(__file__).resolve().parent.parent
+        base = Path(__file__).resolve().parent.parent.parent
         if a.database is None:
             db = sorted(x for x in base.glob('comfy-db*') if x.is_dir())
             if len(db) != 1:
