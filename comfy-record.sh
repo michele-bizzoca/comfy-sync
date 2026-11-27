@@ -38,8 +38,8 @@ for name in model-db.xlsx extension-db.xlsx; do
         cp -- "$db_dir/$name" "$stage/$name"
     fi
 done
-"$py" "$self_dir/comfy-ext-sync.py" record --database "$stage/extension-db.xlsx"
-"$py" "$self_dir/comfy-mod-sync.py" record --database "$stage/model-db.xlsx"
+"$py" "$self_dir/comfy-sync-extensions.py" record --database "$stage/extension-db.xlsx"
+"$py" "$self_dir/comfy-sync-models.py" record --database "$stage/model-db.xlsx"
 cp -- "$config" "$stage/config-db.json"
 printf 'COMFY_VERSION=%s\nPYTHON_VERSION=%s\nTORCH_VERSION=%s\n' \
     "$comfy_version" "$python_version" "$torch_version" > "$stage/version-db.env"

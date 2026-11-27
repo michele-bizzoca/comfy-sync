@@ -13,7 +13,7 @@ from unittest.mock import patch
 from openpyxl import Workbook
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-m = importlib.import_module('comfy-mod-sync')
+m = importlib.import_module('comfy-sync-models')
 
 class Response(io.BytesIO):
     def __init__(self, data, filename='model.bin'):
@@ -498,7 +498,7 @@ class Tests(unittest.TestCase):
 
 class ExtensionTests(unittest.TestCase):
     def setUp(self):
-        self.ext = importlib.import_module('comfy-ext-sync')
+        self.ext = importlib.import_module('comfy-sync-extensions')
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name)

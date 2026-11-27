@@ -6,7 +6,7 @@ Place this repository alongside a single `comfy-db*` directory (for example `com
 
 ## Sync managers
 
-Both `comfy-mod-sync.py` and `comfy-ext-sync.py` accept:
+Both `comfy-sync-models.py` and `comfy-sync-extensions.py` accept:
 
 - `--database PATH`: XLSX catalog; defaults to model-db.xlsx or extension-db.xlsx in the unique sibling comfy-db* directory.
 - `--directory PATH`: managed directory; defaults to sibling comfy-models or comfy-extensions.
@@ -33,8 +33,8 @@ Both record commands replace the workbook atomically; formatting is not preserve
 Run `python -m unittest -v test`. To validate real catalogs without modifying them:
 
 ```sh
-python comfy-mod-sync.py check --database ../comfy-db-main/model-db.xlsx
-python comfy-ext-sync.py check --database ../comfy-db-main/extension-db.xlsx
+python comfy-sync-models.py check --database ../comfy-db-main/model-db.xlsx
+python comfy-sync-extensions.py check --database ../comfy-db-main/extension-db.xlsx
 ```
 
 ## Record installation
