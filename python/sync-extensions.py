@@ -205,22 +205,47 @@ def run(args):
         return 0 if args.dry_run else int(bool(changes or extras))
     installs = changes if args.command in ('update', 'add') else []
     deletes = extras if args.command in ('update', 'remove') else []
+    matches = len(catalog) - len(changes)
+    additions = sum(reason == 'missing' for _, reason in installs)
+    replacements = len(installs) - additions
+    print(f'{args.command.upper()}{" (DRY RUN)" if args.dry_run else ""}: {root}', flush=True)
     for e, reason in installs:
         print(f'INSTALL {e.name} ({reason})')
     for name in deletes:
         print(f'DELETE {name}')
+    print(f'{matches} matches, {len(installs)} installations ({additions} new, {replacements} replacements), {len(deletes)} deletions', flush=True)
     if args.dry_run:
         return 0
     for name in [e.name for e, _ in installs if e.name in entries] + deletes:
         clean(entries[name])
-    # Delete extra repositories before cloning or installing requirements.
-    for name in deletes:
-        clean(entries[name])
-        shutil.rmtree(entries[name])
-    for e, _ in installs:
-        install(e, root)
-    for ext, _ in installs:
-        install_requirements(ext, root, args.python)
+    deleted = installed = replaced = requirements_done = requirements_skipped = 0
+    try:
+        # Delete extra repositories before cloning or installing requirements.
+        for name in deletes:
+            clean(entries[name])
+            shutil.rmtree(entries[name])
+            deleted += 1
+            print(f'DELETED {name}', flush=True)
+        for e, reason in installs:
+            install(e, root)
+            if reason == 'missing':
+                installed += 1
+            else:
+                replaced += 1
+            print(f'COMPLETE {e.name}', flush=True)
+        for ext, _ in installs:
+            if (root / ext.name / 'requirements.txt').is_file():
+                install_requirements(ext, root, args.python)
+                requirements_done += 1
+            else:
+                requirements_skipped += 1
+    finally:
+        print(f'{matches} matches, {installed} new installations, {replaced} replacements, '
+              f'{deleted} deletions, {requirements_done} requirements installed, '
+              f'{requirements_skipped} without requirements.txt; '
+              f'{len(installs) - installed - replaced} installations pending, '
+              f'{len(deletes) - deleted} deletions pending, '
+              f'{len(installs) - requirements_done - requirements_skipped} requirements checks pending', flush=True)
     return 0
 
 def main(argv=None):
